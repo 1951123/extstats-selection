@@ -44,7 +44,8 @@ class CandidateMeasurement:
     capability: str
     levels: dict[int, dict] = field(default_factory=dict)
     # levels[level] = {"estimate": int, "qerror": float, "size_bytes": int,
-    #                  "qerror_repeats": list[float], "capacity": Capacity}
+    #                  "maint_cost": float, "qerror_repeats": list[float],
+    #                  "capacity": Capacity}
 
 
 @dataclass
@@ -126,11 +127,15 @@ def measure_query(
                         sizes.append(backend.stat_size_bytes(stat))
                         estimates.append(est.estimate)
                         qerrs.append(est.qerror if est.qerror is not None else float("nan"))
+                # Maintenance cost is a *deployed-refresh* cost, reported by the
+                # backend (distinct from the measurement-phase protocol cost,
+                # which is never part of the optimisation model).
                 cm.levels[int(level)] = {
                     "estimate": estimates[0],
                     "qerror": _mean(qerrs),
                     "qerror_repeats": qerrs,
                     "size_bytes": _mean_int(sizes),
+                    "maint_cost": backend.maintain_cost(stat),
                     "level": level,
                 }
             mes.candidates[f"{cand.table_unqualified}({','.join(cand.columns)})"] = cm

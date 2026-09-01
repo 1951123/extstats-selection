@@ -128,10 +128,17 @@ $$
 
 ### 1.7 三个开放点（后续设计需显式处理）
 
-- **[O1] 维护成本目前未被真正建模。** 原始问题三个维度里，v1 的 MILP 只有
-  q-error（目标）与存储成本（约束），**维护成本**（ANALYZE / GATHER 的代价，
-  以及容量参数对维护代价的非线性影响）未进入目标/约束。v2 的容量模型（PG
-  `statistics_target` vs Oracle `estimate_percent`）底层维护语义不同，应显式建模。
+- **[O1] 维护成本：已完成可加近似建模（含已知 max 语义偏差）。** 原始问题三个维度里，
+  v1 的 MILP 只有 q-error（目标）与存储成本（约束）。v2 现已加入**部署后刷新**
+  维护成本：每个物理统计带 `maint_cost`，作为与存储并列的**硬预算约束**
+  $\sum_s m_s y_s \le M$（`backend.maintain_cost()` → `core/measure.py` 记录 →
+  `core/optimize.py` 的 `maint_budget`）。两点明确：
+  - **可加近似**：PG 实测 ANALYZE 成本由 `targrows`（= 整表最大 target）决定，是
+    **max 语义**而非可加。当前按用户决策采用可加近似以保持线性可解，max 语义的
+    偏差作为已知近似记录（后续可精化为带指示变量的分段约束）。
+  - **语义区分**：`maint_cost` 是部署后一次刷新的代价（进 ILP）；测量阶段的
+    实验成本（protocol 每轮 CREATE/ANALYZE/EXPLAIN）**不入模型**，二者刻意分离。
+  - 目标保持纯 q-error，维护成本仅作硬约束（与存储预算并列）。
 - **[O2] planner 干扰是有条件成立的独立性的反例。** 模型独立性靠剪枝（列不重叠
   + 稀疏）来保护；但真实规划器在"非稀疏、重叠统计共存"时可能违反它。设计应
   明确"模型可信区"的边界，并让剪枝约束与其对齐。
@@ -345,9 +352,12 @@ def measure_candidates(backend, query, cands, protocol=None):
 | `estimate.py` | 抽象化 | 移入 backend：core 只调用 `backend.estimate()` |
 | `queries.py` | = v1 `BenchQuery` | 不变 |
 
-**MILP 模型不动**（v1 已验证）：目标 $\sum_i w_{is}x_{is}$，约束
+**MILP 模型不动**（v1 已验证 + v2 扩展）：目标 $\sum_i w_{is}x_{is}$，约束
 (1) 存储预算 $\sum_s c_s y_s \le C$，(2) 选择须已创建 $x_{is}\le y_s$，
-(3) 查询内重叠禁止 $x_{is_a}+x_{is_b}\le 1$。全部用 `scipy.optimize.milp`。
+(3) 查询内重叠禁止 $x_{is_a}+x_{is_b}\le 1$，(4) 同组合 level 互斥，
+(5) 可选 global-disjoint，(6，v2 新增) **维护预算** $\sum_s m_s y_s \le M$
+（`maint_cost` 可加，`maint_budget=None` 时不施加，向后兼容）。全部用
+`scipy.optimize.milp`。
 
 ---
 

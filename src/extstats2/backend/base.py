@@ -184,6 +184,26 @@ class Backend(ABC):
     def list_stats(self, table: str) -> list[StatObject]:
         """Return the statistics currently present on ``table`` (for verify)."""
 
+    # -- maintenance cost --------------------------------------------------
+
+    def maintain_cost(self, obj: StatObject) -> float:
+        """Estimated cost of *one refresh* of ``obj`` in deployed operation.
+
+        This is the statistic's *operational* refresh cost (e.g. the ANALYZE /
+        GATHER_TABLE_STATS time contributed by this statistic), used by the ILP
+        as a per-object maintenance cost ``m_s`` under an additive approximation.
+
+        It is deliberately distinct from the *measurement-phase* cost of running
+        the measurement protocol (created/analyzed/explained while measuring),
+        which never enters the optimisation model. Each backend may implement
+        this via a model estimate (e.g. derived from table size and capacity) or
+        a cached measurement.
+
+        The default returns ``0`` so backends that do not track maintenance cost
+        degrade gracefully (the ILP then ignores the maintenance budget).
+        """
+        return 0.0
+
     # -- isolation ---------------------------------------------------------
 
     @abstractmethod

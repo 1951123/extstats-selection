@@ -20,6 +20,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bench", default="census",
                    choices=["census", "job", "stats_ceb", "stats_ceb_single"])
     p.add_argument("--budget-bytes", type=int, default=0, help="storage budget (0=unlimited)")
+    p.add_argument("--maint-budget", type=float, default=None,
+                   help="maintenance budget for the ILP (None/0=unconstrained)")
     p.add_argument("--capacities", type=int, nargs="+", default=[0, 1, 2],
                    help="abstract capacity level indices to probe")
     p.add_argument("--protocol", choices=["a", "m", None], default=None)
@@ -34,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         backend=args.backend,
         bench=args.bench,
         budget_bytes=args.budget_bytes,
+        maint_budget=args.maint_budget,
         capacities=tuple(args.capacities),
         protocol=args.protocol,
     )
@@ -45,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"bench        : {cfg.bench}")
         print(f"capacities   : {cfg.capacities}")
         print(f"budget_bytes : {cfg.budget_bytes}")
+        print(f"maint_budget : {cfg.maint_budget}")
         return 0
     return 0
 

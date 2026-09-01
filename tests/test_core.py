@@ -65,6 +65,80 @@ def test_milp_budget_capped():
     assert res.total_bytes <= 400
 
 
+def test_milp_maint_budget_binds():
+    # Two disjoint stats, both big improvements, both fit the storage budget,
+    # but only one fits the *maintenance* budget when maint_costs differ.
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=2, cost=200, maint_cost=100.0),
+        PhysicalStat(table="t", columns=("c", "d"), level=2, cost=200, maint_cost=100.0),
+    ]
+    base = 10.0
+    # non-overlapping -> both selectable; storage 400 <= 1000 so only maint binds
+    opts = [
+        Option(stat_index=0, qerror=2.0, level=2, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=2.0, level=2, query="q1", cand="t(c,d)"),
+    ]
+    # maint budget 120 < sum(100+100)=200 -> at most one selected
+    res = solve_ilp(phys, [opts], [base], budget_bytes=1000, maint_budget=120.0)
+    assert len(res.selected_stats) == 1
+    assert res.total_maint == pytest.approx(100.0, abs=1e-6)
+    assert res.total_maint <= 120.0
+    # and q-error reflects that single selection (2.0)
+    assert res.mean_qerror == pytest.approx(2.0, abs=1e-6)
+
+
+def test_milp_maint_budget_noop_when_none():
+    # Without maint_budget, maint_cost is ignored -> both selected (behavior
+    # identical to pre-maintenance ILP).
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=2, cost=200, maint_cost=100.0),
+        PhysicalStat(table="t", columns=("c", "d"), level=2, cost=200, maint_cost=100.0),
+    ]
+    base = 10.0
+    opts = [
+        Option(stat_index=0, qerror=2.0, level=2, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=2.0, level=2, query="q1", cand="t(c,d)"),
+    ]
+    res = solve_ilp(phys, [opts], [base], budget_bytes=1000)  # no maint_budget
+    assert len(res.selected_stats) == 2
+    assert res.total_maint == pytest.approx(200.0, abs=1e-6)
+
+
+def test_build_problem_reads_maint_cost():
+    phase1 = {
+        "results": [
+            {
+                "qid": "q1",
+                "qerror_base": 10.0,
+                "candidates": {
+                    "t(a,b)": {
+                        "table": "t",
+                        "columns": ["a", "b"],
+                        "levels": {
+                            "1": {"qerror": 2.0, "size_bytes": 100,
+                                  "maint_cost": 12.5},
+                            "2": {"qerror": 1.5, "size_bytes": 200,
+                                  "maint_cost": 25.0},
+                        },
+                    },
+                },
+            }
+        ]
+    }
+    phys, _opts, _bases = build_problem(phase1)
+    by_level = {p.level: p for p in phys}
+    assert by_level[1].maint_cost == pytest.approx(12.5)
+    assert by_level[2].maint_cost == pytest.approx(25.0)
+    # legacy dicts without maint_cost default to 0.0
+    legacy = {"results": [{
+        "qid": "q1", "qerror_base": 10.0,
+        "candidates": {"t(a,b)": {"table": "t", "columns": ["a", "b"],
+                                  "levels": {"1": {"qerror": 2.0, "size_bytes": 100}}}},
+    }]}
+    p, _o, _b = build_problem(legacy)
+    assert p[0].maint_cost == 0.0
+
+
 def test_milp_shared_resource_paid_once():
     # Same physical stat usable by two queries; only one copy paid.
     phys = [PhysicalStat(table="t", columns=("a", "b"), level=1, cost=200)]

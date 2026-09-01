@@ -65,6 +65,9 @@ class PhysicalStat:
     columns: tuple[str, ...]
     level: int
     cost: int
+    # Maintenance cost of one deployed refresh (additive approximation);
+    # 0.0 when the backend does not track it.
+    maint_cost: float = 0.0
     key: str = ""
 
     def __post_init__(self) -> None:
@@ -84,6 +87,7 @@ class ILPResult:
     baseline_per_query: list[float]
     selected_stats: list[PhysicalStat]
     total_bytes: int
+    total_maint: float
     chosen: list[list[str]]
     status: int
     message: str
@@ -143,6 +147,7 @@ def build_problem(
                             columns=cols,
                             level=level,
                             cost=int(lv["size_bytes"]),
+                            maint_cost=float(lv.get("maint_cost", 0.0)),
                         )
                     )
                 opts.append(
@@ -175,10 +180,18 @@ def solve_ilp(
     queries_options: list[list[Option]],
     qerror_base: list[float],
     budget_bytes: int,
+    maint_budget: Optional[float] = None,
     per_query_cap: Optional[int] = None,
     global_disjoint: bool = False,
 ) -> ILPResult:
-    """Solve the multi-select shared-resource ILP with scipy.optimize.milp."""
+    """Solve the multi-select shared-resource ILP with scipy.optimize.milp.
+
+    ``maint_budget`` (optional): a hard budget on the total *maintenance cost*
+    of the selected statistics, ``sum_s maint_cost(s) * y_s <= maint_budget``
+    (additive approximation — see §1.7 [O1] / docs). When ``None`` (or ``<= 0``),
+    no maintenance constraint is added and ``maint_cost`` is ignored, so existing
+    call sites behave exactly as before.
+    """
     n_stats = len(phys_stats)
     n_opt = sum(len(opts) for opts in queries_options)
     n_var = n_stats + n_opt
@@ -214,6 +227,10 @@ def solve_ilp(
             if colset[a] & colset[b]
         )
         n_extra += n_disjoint
+    # optional maintenance budget adds one constraint row
+    has_maint = maint_budget is not None and maint_budget > 0
+    if has_maint:
+        n_extra += 1
     n_con = 1 + n_opt + n_extra
 
     A = lil_matrix((n_con, n_var))
@@ -225,6 +242,13 @@ def solve_ilp(
         A[nrow, s_idx] = ps.cost
     ub[nrow] = budget_bytes
     nrow += 1
+
+    # 1b) maintenance budget (optional, additive): sum_s maint_s * y_s <= M
+    if has_maint:
+        for s_idx, ps in enumerate(phys_stats):
+            A[nrow, s_idx] = ps.maint_cost
+        ub[nrow] = float(maint_budget)
+        nrow += 1
 
     # 2) x_is - y_s <= 0
     gi = 0
@@ -283,6 +307,7 @@ def solve_ilp(
     x = res.x
     selected = [phys_stats[s_idx] for s_idx in range(n_stats) if x[s_idx] > 0.5]
     total_bytes = int(sum(ps.cost for ps in selected))
+    total_maint = float(sum(ps.maint_cost for ps in selected))
 
     qerr_per_query: list[float] = []
     chosen: list[list[str]] = []
@@ -306,6 +331,7 @@ def solve_ilp(
         baseline_per_query=list(qerror_base),
         selected_stats=selected,
         total_bytes=total_bytes,
+        total_maint=total_maint,
         chosen=chosen,
         status=int(res.status),
         message=str(res.message),
