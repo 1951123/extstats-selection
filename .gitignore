@@ -1,0 +1,59 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.whl
+
+# --- Virtual environments / interpreters ---
+.venv/
+venv/
+env/
+.conda/
+
+# --- Test / coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- Tooling / caches ---
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- Editor (personal, not a repo asset) ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Benchmark data (large third-party payloads; keep schema/*.sql) ---
+benchmarks/*/data/*.csv
+benchmarks/*/data/*.tgz
+benchmarks/*/data/*.tar
+benchmarks/*/data/*.gz
+!benchmarks/*/data/*.sql
+
+# --- Experiment output (results are data artifacts; whitelist selectively) ---
+results/
+output/
+experiments/
+
+# --- Database source trees (local reference, not tracked) ---
+# e.g. postgresql-16.14/ or extracted engine trees vendored for reference only
+postgresql-*/
+*.tar.bz2
+*.tar.gz
+
+# --- Paper LaTeX build artifacts (keep .tex/.bib/.cls/.bst) ---
+paper/*.pdf
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.bbl
+paper/*.blg
