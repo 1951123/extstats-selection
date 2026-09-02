@@ -296,16 +296,51 @@ class PostgresBackend(Backend):
 
     # -- maintenance cost ---------------------------------------------------
 
+    # Calibrated on Census `climate` (2.46M rows, warm cache), measured
+    # 2026-09-02: bare ANALYZE is near-linear in `statistics_target` up to the
+    # full-table-scan saturation point, with slope ~0.00256 s/target.
+    _W_PER_TARGET = 0.00256          # s per statistics_target unit (linear region)
+    _VAR_PER_STAT_T1000 = 0.02       # s per added statistic @ statistics_target 1000
+    _RELTUPLES_CACHE: dict[str, float] = {}
+
+    def _reltuples(self, table: str) -> float:
+        """Estimated row count of ``table`` from pg_class (lazily cached)."""
+        base = _clean_table(table).rpartition(".")[2]
+        cached = self._RELTUPLES_CACHE.get(base)
+        if cached is not None:
+            return cached
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.reltuples FROM pg_class c WHERE c.relname = %s",
+                (base,),
+            )
+            row = cur.fetchone()
+        n = float(row[0] if row and row[0] else 0)
+        self._RELTUPLES_CACHE[base] = n
+        return n
+
     def maintain_cost(self, obj: StatObject) -> float:
         """Estimate the deployed one-refresh ANALYZE cost of ``obj`` (seconds).
 
-        Additive fixed+variable model (v1 §1.7 [O1] / §5.3):
-          fixed ≈ 22s at t10000, scaled by target ratio;  var scales with target
-          and column count. A model estimate for the ILP maintenance budget.
+        Piecewise-linear + saturation fixed cost, plus a small additive per-stat
+        variable term — calibrated on Census `climate` (§6.1):
+
+          fixed(t) = w_per_target * min(300*t, reltuples)     # ramp then full scan
+          var(obj) = var_per_stat_t1000 * (t/1000) * f(arity)
+
+        The ramp comes from sampling: ANALYZE scans ~min(300*target, N) sample
+        rows, so cost grows ~linearly with target until the table is fully
+        scanned. The variable term (recomputing each statistic's payload on the
+        shared sample) is small relative to the fixed scan.
         """
-        target = self._native_target(obj.capacity)
-        fixed = 22.0 * (target / 10000.0)
-        var = 0.001 * target * (1.0 + 0.1 * max(len(obj.columns) - 2, 0))
+        t = self._native_target(obj.capacity)
+        n = max(self._reltuples(obj.table), 1.0)
+        # Saturation target: sampling 300*t rows hits a full-table scan at t_sat.
+        t_sat = n / 300.0
+        # fixed: linear (w_per_target s per target-unit) up to t_sat, then flat
+        fixed = self._W_PER_TARGET * min(t, t_sat)
+        # variable: per-stat payload update, scales with target and arity
+        var = self._VAR_PER_STAT_T1000 * (t / 1000.0) * (1.0 + 0.1 * max(len(obj.columns) - 2, 0))
         return float(fixed + var)
 
     @staticmethod
