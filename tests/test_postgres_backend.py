@@ -94,6 +94,27 @@ def test_maintain_cost_positive_and_monotonic(backend):
 
 
 @_NEED_PG
+def test_maintain_cost_matches_measured_fixed_analyze(backend):
+    """The calibrated fixed cost should reproduce measured bare-ANALYZE
+    times (Census climate, warm) within tolerance."""
+    mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
+    measured = {100: 0.25, 1000: 2.59, 10000: 20.55}
+    for level, tgt in [(0, 100), (1, 1000), (2, 10000)]:
+        obj = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
+                         capacity=Capacity(level))
+        model = backend.maintain_cost(obj)
+        assert model == pytest.approx(measured[tgt], rel=0.35), (
+            f"target {tgt}: model {model:.2f} vs measured {measured[tgt]}"
+        )
+    # Saturation evidence: at target 10000 the model must be well below the pure
+    # linear (no-cap) prediction w*t (=25.6s), reflecting the full-table-scan cap.
+    obj10k = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
+                        capacity=Capacity(2))
+    model10k = backend.maintain_cost(obj10k)
+    assert model10k < backend._W_PER_TARGET * 10000.0 * 0.95
+
+
+@_NEED_PG
 def test_capacity_ladder_mapping(backend):
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     for lvl, expected in [(0, 100), (1, 1000), (2, 10000)]:
