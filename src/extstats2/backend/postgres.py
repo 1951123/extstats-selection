@@ -51,6 +51,13 @@ _KIND_DATA_COL = {
     "ndistinct": "stxdndistinct",
     "mcv": "stxdmcv",
 }
+# Payload column's native type per capability kind (<> an SQL `%TYPE` reference,
+# which is only valid inside PL/pgSQL).
+_KIND_DATA_TYPE = {
+    "dependency": "pg_dependencies",
+    "ndistinct": "pg_ndistinct",
+    "mcv": "pg_mcv_list",
+}
 
 # Leading ``SELECT COUNT(*)`` (case-insensitive).
 _SELECT_COUNT_RE = re.compile(r"(?is)^\s*SELECT\s+COUNT\(\*\)\s+")
@@ -64,6 +71,147 @@ DEFAULT_CAPACITY_LADDER = {
 
 # Key PostgreSQL uses for a plan node's estimated row count in EXPLAIN JSON.
 _ROW_KEY = "Plan Rows"
+
+
+# ---------------------------------------------------------------------------
+# Protocol-M (catalog-mask) primitives — PostgreSQL
+#
+# Port of v1's ``measure_mask.py`` low-level helpers onto the v2 StatObject /
+# capability abstraction. Protocol-M avoids a per-candidate ANALYZE: all of a
+# table's candidate extended statistics are built by ONE ANALYZE; each is then
+# measured by NULL-masking every *other* statistic's payload in
+# ``pg_statistic_ext_data`` and EXPLAINing (a NULL payload makes the planner
+# ignore the statistic, without error). Payloads are backed up to a temporary
+# table and restored in-place by same-type ``pg_mcv_list`` assignment (there is
+# no bytea cast for driver round-trip).
+# ---------------------------------------------------------------------------
+
+
+class PgPayloadBackup:
+    """NULL-maskable snapshot of a set of extended-statistic payloads.
+
+    Mirrors v1 ``measure_mask.py``: objects are grouped by capability kind and
+    their ``pg_statistic_ext_data`` payload rows copied into per-kind temporary
+    tables typed to the payload column's own type (``pg_mcv_list`` & friends,
+    which have no bytea cast). Masking NULLs the live payload; restoring
+    ``UPDATE ... SET col = backup.payload ...`` is type-safe and done entirely
+    server-side.
+    """
+
+    def __init__(self, conn: Connection, objs: list[StatObject], prefix: str):
+        self._conn = conn
+        self._prefix = prefix
+        # kind -> [(oid, col)]
+        self._by_kind: dict[str, list[tuple[int, str]]] = {}
+        for o in objs:
+            name = o.capability.name if o.capability is not None else "mcv"
+            col = _KIND_DATA_COL[name]
+            oid = self._stat_oid(o)
+            if oid is not None:
+                self._by_kind.setdefault(name, []).append((oid, col))
+        self._backed_up = False
+
+    def _stat_oid(self, obj: StatObject) -> Optional[int]:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT oid FROM pg_statistic_ext WHERE stxname = %s",
+                (obj.name,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def _backup_name(self, kind: str) -> str:
+        return f"{self._prefix}_{kind}"
+
+    def _ensure_backup(self) -> None:
+        if self._backed_up:
+            return
+        for kind, pairs in self._by_kind.items():
+            tbl = self._backup_name(kind)
+            col = pairs[0][1]  # same col for a kind
+            typ = _KIND_DATA_TYPE[kind]
+            with self._conn.cursor() as cur:
+                cur.execute(f"DROP TABLE IF EXISTS {tbl}")
+                cur.execute(
+                    f"CREATE TEMP TABLE {tbl} (stxoid oid, payload {typ})")
+            for oid, _ in pairs:
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        f"INSERT INTO {tbl} (stxoid, payload) "
+                        f"SELECT stxoid, {col} FROM pg_statistic_ext_data "
+                        f"WHERE stxoid = %s AND {col} IS NOT NULL", (oid,))
+        self._backed_up = True
+
+    def _keep_oids(self, keep: set[StatObject]) -> set[int]:
+        keep_oids: set[int] = set()
+        for k in keep:
+            oid = self._stat_oid(k)
+            if oid is not None:
+                keep_oids.add(oid)
+        return keep_oids
+
+    def mask_all_but(self, keep: set[StatObject]) -> None:
+        """NULL every backed-up payload except those in ``keep``."""
+        self._ensure_backup()
+        keep_oids = self._keep_oids(keep)
+        for kind, pairs in self._by_kind.items():
+            col = pairs[0][1]
+            for oid, _ in pairs:
+                if oid in keep_oids:
+                    continue
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE pg_statistic_ext_data SET {col} = NULL "
+                        f"WHERE stxoid = %s", (oid,))
+
+    def restore(self) -> None:
+        if not self._backed_up:
+            return
+        for kind, pairs in self._by_kind.items():
+            tbl = self._backup_name(kind)
+            col = pairs[0][1]
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE pg_statistic_ext_data d SET {col} = b.payload "
+                    f"FROM {tbl} b WHERE d.stxoid = b.stxoid")
+        self._backed_up = False
+
+    def close(self) -> None:
+        for kind in list(self._by_kind):
+            with self._conn.cursor() as cur:
+                cur.execute(f"DROP TABLE IF EXISTS {self._backup_name(kind)}")
+        self._by_kind = {}
+
+
+class PgCatalogDriver:
+    """CatalogDriver (see backend/catalog.py) over PostgreSQL catalogs."""
+
+    def __init__(self, backend: "PostgresBackend"):
+        self._backend = backend
+
+    @property
+    def conn(self) -> Connection:
+        return self._backend.conn
+
+    def _clean(self, table: str) -> str:
+        return table.lstrip(".") if table else table
+
+    def lookup_oid(self, obj: StatObject) -> Optional[int]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT oid FROM pg_statistic_ext WHERE stxname = %s", (obj.name,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def size_bytes(self, obj: StatObject) -> int:
+        return self._backend.stat_size_bytes(obj)
+
+    def list_on_table(self, table: str) -> list[StatObject]:
+        return self._backend.list_stats(table)
+
+    def backup_payloads(self, objs: list[StatObject]) -> PgPayloadBackup:
+        tag = id(objs) & 0xFFFF
+        name = f"_ext_mask_{tag}"
+        return PgPayloadBackup(self.conn, list(objs), name)
 
 
 class PostgresBackend(Backend):
@@ -122,10 +270,16 @@ class PostgresBackend(Backend):
         )
 
     def has_protocol_m(self) -> bool:
-        # PG *can* support catalog-mask (Protocol-M), but the current M2 isolate()
-        # implements the universal Protocol-A (drop/rebuild). Flip to True once
-        # the Protocol-M CatalogDriver over pg_statistic_ext_data is implemented.
+        # PG's catalog-mask (Protocol-M) catalog primitives are implemented
+        # (see PgCatalogDriver / PgPayloadBackup), but the measure-path that
+        # *uses* them (build-all-then-mask scheduler in core/measure) is not yet
+        # wired, so we do not yet advertise Protocol-M through protocol(None).
+        # Flip to True once measure_query dispatches on Protocol-M.
         return False
+
+    def catalog_driver(self) -> PgCatalogDriver:
+        """Return this backend's Protocol-M catalog driver."""
+        return PgCatalogDriver(self)
 
     # -- capacity ----------------------------------------------------------
 
