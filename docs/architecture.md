@@ -662,6 +662,52 @@ $w_{t,\ell}$，使**每被激活表只付一次固定 ANALYZE 成本**（按其�
 
 ---
 
+## 7bis. 解耦容量 (λ, param) 的优化模型（设计基准，未实现）
+
+> 这是 §6.3(g) 论点 + 一路讨论收敛成的**正式模型 spec**，供后续求解器实现参照；
+> 当前 `core/optimize.py` 仍是 §7 的 per-stat-level 模型，二者在实现上尚未合并。
+
+**把 capacity 拆成两轴**（见 §6.3g、§6.3f）：
+- **λ（表级扫描档）**：一次 ANALYZE/GATHER 采多少行，是**表级 / 部署全局**的决策
+  （PG `targrows≈300·target`、Oracle `estimate_percent`），主导一次扫描的 fixed 维护成本，
+  并决定 fidelity（能否捕获驱动组合）。
+- **param（统计表示参数）**：每个统计对象的表示细节（MCV 项 / 直方图桶数），是**逐对象**
+  决策，主导该对象的存储与其表示误差；非单调（捕获已足后再加并不更优，§6.3g）。
+
+**决策变量**（内层，给定外层 λ 后）：对列组 $C$、可选 param $p$：
+$$y_{C,p}\in\{0,1\}\ (\text{建一个 param=}p\text{ 对象}),\qquad x_{i,(C,p)}\le y_{C,p}.$$
+λ **不进入对象下标**——它由外层给定，同一表的所有被选统计共享该次布局的 λ。
+
+**内层（给定全局 λ，固定/共享扫描在此 λ）**——选 (列组, param) 以最小化保守的 workload 目标：
+$$\min\ \underbrace{\tfrac1{|Q|}\sum_i \hat e_i^{(\lambda,T_i)}}_{\text{query-level, 见 fidelity}}
+\quad\text{s.t.}\quad
+\begin{cases}
+\sum_p y_{C,p}\le 1,\\
+x_{is_a}+x_{is_b}\le 1\ (\text{查询内重叠, 乘性近似可信前提}),\\
+\sum_{C,p} c^{(\text{param})}_{C,p}\,y_{C,p}\le B,\\
+\text{fixed 维护}=\text{常数(本 λ)}, \quad \text{var 维护}=\sum \text{var}^{(\text{param})}y.
+\end{cases}$$
+
+**query-level 的 fidelity → 不硬删、保守化。** λ 是否够捕获是**逐查询**量
+$\lambda_{q}=\mathrm{truth}_q\cdot\mathrm{sample}_N(\lambda)/N_t$。**不作为硬删**：
+低 λ 的查询不用乐观均值，而改用其该 λ 下的**保守估计**（如 `qerror_worst` / 上界 / 由
+`qerror_std` 抬高——即用已记录的 §6.3f 字段），再进入上述 workload 平均。
+
+**外层**——对 λ∈Λ 各解一遍内层 MILP，比较时计入"这次部署的 fixed 扫描成本"，取：
+$$\min_{\lambda\in\Lambda}\ \Big[\ \text{innerObj}^{(\lambda)}\ (\text{已含 query-level 保守化}) \
++\ \rho\,\text{maintFixed}^{(\lambda)}\ \Big].$$
+不做**整档一刀切拒绝**：某 λ 恰使某个(些)query 落入低 fidelity 时，该 λ 只是在这些 query 上
+保守化偏高、从而在 cost 权衡下自然不敌更大 λ；它不会被从 Λ 里删掉。
+
+**λ 的离散化**：预测量原则(§1.1-1.8)——不允许"边解边补测 "。故 Λ 不取连续全采样，
+而是**少数离散表级扫描档**(沿用现有 ladder 档，如 B 起步：现有 {10,100,1000,…} 或
+Oracle {1,10,100}%)，每个 λ 下对全部候选×param 完整预扫；是否按 fidelity 边界(ω≈1/5)加密
+各 λ 档留作数据驱动的后续开点，不硬编码 ladder。
+
+
+
+---
+
 ## 8. 配置与 CLI
 
 ```python
