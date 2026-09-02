@@ -213,9 +213,13 @@ class OracleBackend(Backend):
             by_table.setdefault(o.table, []).append(o)
         for table, objs_on in by_table.items():
             tname = self._q_table(table)
-            # Base single-column stats w/o histograms (SIZE 1), plus histograms
-            # only on requested column groups.
-            mo_parts = ["FOR ALL COLUMNS SIZE 1"]
+            # Keep the engine's natural per-column statistics (SIZE AUTO builds
+            # histograms for skewed columns) and add a histogram only on the
+            # requested column groups. This matches how a real deployment would
+            # analyse: measuring a column group on top of healthy single-column
+            # stats is directly comparable to PostgreSQL's ANALYZE + extended
+            # statistic (fair cross-backend baseline/candidate semantics).
+            mo_parts = ["FOR ALL COLUMNS SIZE AUTO"]
             for o in objs_on:
                 cap = o.capability
                 cap_name = cap.name if cap is not None else "mcv"
@@ -229,6 +233,28 @@ class OracleBackend(Backend):
                     f"ownname=>'{self._owner}', tabname=>'{tname}', "
                     "method_opt=>:m, estimate_percent=>:ep, degree=>1); END;",
                     {"m": method_opt, "ep": ep})
+
+    def restore_natural_stats(self, table: str, estimate_percent: float = 100.0,
+                              degree: int = 1) -> None:
+        """Restore the engine's *natural* per-column statistics baseline.
+
+        ``build_stats`` gathers with ``FOR ALL COLUMNS SIZE 1`` (no single-column
+        histograms) to keep the focused measure cheap. That *destroys* the
+        per-column histograms a real deployment would have, so measuring
+        "baseline (no extended stats)" right after such gathers reports an
+        artificially weak Oracle estimate. A fair cross-backend baseline should
+        compare each engine with its normal per-column statistics; this method
+        re-gathers with ``SIZE AUTO`` (builds histograms for skewed columns),
+        mirroring PostgreSQL's default ``ANALYZE`` single-column baseline.
+        """
+        tname = self._q_table(table)
+        with self._cur() as cur:
+            cur.execute(
+                "BEGIN DBMS_STATS.GATHER_TABLE_STATS("
+                f"ownname=>'{self._owner}', tabname=>'{tname}', "
+                "method_opt=>'FOR ALL COLUMNS SIZE AUTO', "
+                "estimate_percent=>:ep, degree=>:d); END;",
+                {"ep": estimate_percent, "d": degree})
 
     # -- estimation --------------------------------------------------------
 

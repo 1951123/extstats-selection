@@ -461,9 +461,12 @@ def measure_candidates(backend, query, cands, protocol=None):
   **列集合**（`DROP_EXTENDED_STATS` 按列表达式 drop），不是可写对象名——backend 的
   StatObject 因此按列集合识别、drop、list（与本层 Protocol-A 隔离的列集合匹配一致）。
 - **构建**: `GATHER_TABLE_STATS(ownname, tabname, estimate_percent=<cap>,
-  METHOD_OPT => 'FOR ALL COLUMNS SIZE 1 FOR COLUMNS (...) SIZE <buckets>')`。
-  一个表一次 GATHER 会在一趟采样里建好全部所需列组（**FIXED_ONLY / per_scan**）。
-  `mcv`(primary) 建列组+直方图（SIZE=buckets）；`ndistinct` 只建列组（SIZE=1）。
+  METHOD_OPT => 'FOR ALL COLUMNS SIZE AUTO FOR COLUMNS (...) SIZE <buckets>')`。
+  一个表一次 GATHER 会在一趟采样里建好全部所需列组（**FIXED_ONLY / per_scan**），
+  并**保留自然单列直方图**（SIZE AUTO）——这让"无列组的基线"与"加列组后"的测量都是
+  在健康单列统计上进行的（M4 发现：若用 SIZE 1 会清掉单列直方图，造成虚假的大幅
+  改善假象，见 §6.3a）。`mcv`(primary) 建列组+直方图（SIZE=buckets）；`ndistinct`
+  只建列组（SIZE=1）。
 - **估计**: 重写 `COUNT(*)`→`SELECT *`，`EXPLAIN PLAN SET STATEMENT_ID=<literal>` +
   `plan_table` 读根节点 `Cardinality`，读后按 statement_id 清理。注意 STATEMENT_ID
   必须是字符串字面量（bind 会 ORA-01780）；且 Oracle 不接受 `SELECT FROM`（缺表达式），
@@ -476,15 +479,59 @@ def measure_candidates(backend, query, cands, protocol=None):
   SQL 里 `=` 比较，改在 Python 侧匹配列集合）。
 - **隔离协议**: Oracle 无 catalog-mask（不能单独 NULL 掉一列），`has_protocol_m() ==
   False`，走 **Protocol-A**（建/`GATHER`/测/删/重建成按列集合匹配的版本）。
-- **能力映射**: `mcv`(column group histogram, **primary**) 实证能修复 selection
-  基数 q-error：CLIMATE 上 (IAVAIL,ICLASS) 列组把 ~49k → ~989k（真值 ~990k）。
-  `ndistinct`(group) 支持；`dependency` 不支持。
+- **能力映射**: `mcv`(column group histogram, **primary**) 是修复 selection 基数
+  q-error 的能力。它能否带来收益取决于查询：在已被自然单列直方图估准（base≈1.8）的
+  近独立谓词上几乎无增益；在**多列强相关、极稀疏命中**的查询（query.62/184/61，
+  base≈1000-4000）上能把 qerr 压到个位数（见 §6.3c）。`ndistinct`(group) 支持；
+  `dependency` 不支持。
 - **维护成本模型**: 列组共享一趟 GATHER 扫描 → `MaintStructure.FIXED_ONLY` +
   容量模型 `per_scan`（estimate_percent 是每次整表扫描的采样抽屉）。`table_maintain_tiers`
   按 CLIMATE(~2.46M) 标定：estimate 1%→0.54s、10%→2.10s、100%→21.7s（degree=1，按行数
   缩放）；`stat_maintain_var` ≈ 常数（无额外按统计的扫描）。
 - 连接：python-oracledb thin，autocommit；owner = 当前 schema (SYSTEM)。基准表都以未加引
   号、大写形式匹配（Oracle 折叠未引号标识符为大写）。
+
+### 6.3 跨后端交叉验证（M4）— 结论与教训
+
+在 Census `climate`（PG `census` 与 Oracle `SYSTEM.CLIMATE` **同为 2,458,285 行**，
+逐行一致）上，用同一份 benchmark 与同一套 `core/` 做交叉验证。
+
+**(a) 测量假象修正：基线必须用"自然单列统计"。** 最初的 Oracle 基线报出 qerr≈32，
+而 PG 只报 ~1.8 —— 看似引擎天差地别。追查发现这是 **Oracle 侧自造的假象**：本后端
+`build_stats` 早期用 `FOR ALL COLUMNS SIZE 1`（不建单列直方图），反复 mcv gather 后
+把表的单列直方图**全清掉**，于是"无扩展统计"基线被压到极差，再建列组"修"回来看起来
+改善巨大，但大部分改善来自重建单列统计而非列组本身。**教训**：跨后端对比前，两端都必须
+从各自引擎的*自然单列统计*出发（PG `ANALYZE`；Oracle `GATHER ... FOR ALL COLUMNS SIZE
+AUTO at 100%`）；为此两后端都增加 `restore_natural_stats()`（PG 单列 ANALYZE，Oracle
+整表 SIZE AUTO），Oracle `build_stats` 也改为保留自然单列直方图（SIZE AUTO）再加列组。
+
+**(b) 修假象后，两引擎的自然基线逐查询对齐**（468 条 census 查询）：PG 平均 qerr
+≈25.0、中位 1.27；Oracle ≈25.2、中位 1.28；log-qerr 的 Pearson 相关系数 ≈ **1.0**，
+中位 PG/Oracle 比值 1.0 —— 同一份数据上两引擎的"单列统计估计质量"逐查询一致。最大
+误差的查询（qerr 数百–数千）两引擎**完全相同**：query.184/465/62/61 等，均为
+**多列强相关、且 combo 命中极稀疏行（truth≈13–107）**的查询。
+
+**(c) 主导列组引擎无关（one-stat sufficiency 的跨引擎证据）。** 对这些最坏查询，两端
+各自独立枚举 2 列 mcv 列组并报告最优者（数值为复现脚本 `results/cross_focus.json`；
+两者皆用引擎全表采样建列组）：
+
+| 查询 (truth) | 自然基线 PG / Oracle | 主导对 (两引擎各自最优) | 非主导对照对 |
+| --- | --- | --- | --- |
+| query.62 (45) | 2054 / 2069 | **`(iRspouse,iWork89)`**：PG 45, Oracle 2.5 | 其余 ~1432–2069 |
+| query.184 (13) | 4228 / 4162 | **`(iDisabl1,iRspouse)`**：PG 2.8, Oracle 1.3 | 其余 ~88–4162 |
+| query.61 (107) | 1028 / 1035 | **`(iDisabl2,iYearsch)`**：PG 32, Oracle 1.1 | 其余 ~1001–1035 |
+
+PG 与 Oracle **各自独立认定同一 2 列组是唯一能大幅修复该查询的主导组**（agreement=True
+对所有三查询），其余列对在**两端都无效**（qerr 仍 ~10²–10³）。结论：**"哪个列组成的统计
+值得买"是数据的列相关结构的性质，不是引擎实现的性质** —— PG 的 `mcv` 与 Oracle 的
+column-group histogram 只是同一"多列值分布"能力的不同落地。这就是 §1.4 one-stat
+sufficiency / MCV-core 收敛在跨后端意义上的实证支撑。（注：查询修复后 PG/Oracle 的绝对
+主导列组行 qerr 略有差异，是两引擎采样与直方图像限差异；量级、主导列组与"非主导无效"的
+结论完全一致。）
+
+复现：`python -m extstats2.eval.cross_focus --out results/cross_focus.json`（从自然单列
+基线、全表采样建列组，输出 3 组对照）。更大范围基线对齐统计在 `results/` 的临时 ad-hoc
+脚本记录中。
 
 ---
 
@@ -535,10 +582,13 @@ CLI 流程与 v1 一致：`generate → measure → optimize → verify`，但�
 2. **M2 — PG 后端**：移植 v1 全部 PostgreSQL 逻辑到 `backend/postgres.py`，
    通过一条 census 冒烟测量验证 `core` 跑通 PG 路径（含 Protocol-M）。
 3. **M3 — Oracle 后端（已完成）**：实现 `backend/oracle.py`（column groups +
-   Protocol-A，按列集合隔离），验证同一 `core` 无改动跑 census——`(iAvail,iClass)`
-   列组把 q-error 从 ~32.8 修到 ~1.6，并干净恢复（无残留统计）。Oracle 特有的
-   MCV 收敛与 FIXED_ONLY/per_scan 维护模型已在 §6.2 / §4 记录。
-4. **M4 — 交叉验证**: 同一份核心算法在 PG/Oracle 上对比结果，证明抽象层真正通用。
+   Protocol-A，按列集合隔离），验证同一 `core` 无改动跑 census。MCV 收敛与
+   FIXED_ONLY/per_scan 维护模型已在 §6.2 / §4 记录。
+4. **M4 — 交叉验证（已完成核心验证）**：同一份 `core` 在 PG/Oracle 上对比，证明抽象层真正
+   通用。关键结论见 §6.3：*自然单列基线逐查询对齐（log-qerr corr≈1.0）*、*修正了"Oracle
+   基线偏差"的测量假象（改用自然单列统计基线）*，且*最坏相关查询的主导列组两引擎选定
+   一致（query.62/184/61，agreement=True，复现脚本 `extstats2.eval.cross_focus`）*。
+   收尾可选：在完整 workload 上用 ILP 对比两端整体"买哪些列组"、以及协议-M/更精细的成本。
 
 ---
 

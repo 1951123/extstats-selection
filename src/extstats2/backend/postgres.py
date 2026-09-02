@@ -163,6 +163,17 @@ class PostgresBackend(Backend):
         with self.conn.cursor() as cur:
             cur.execute(f"DROP STATISTICS IF EXISTS {self._q(obj.name)}")
 
+    def restore_natural_stats(self, table: str, **_) -> None:
+        """Restore PG's natural per-column statistics baseline (single ANALYZE).
+
+        PostgreSQL's plain ``ANALYZE`` builds normal single-column histograms /
+        stats. This represents the honest "no extended statistics" baseline; it
+        is a parity helper mirroring ``OracleBackend.restore_natural_stats`` so
+        the cross-backend harness measures both engines from natural stats.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(f"ANALYZE {_clean_table(table)}")
+
     def build_stats(self, objs: list[StatObject], capacity: Capacity) -> None:
         """Set per-object targets, then ANALYZE each distinct base table once."""
         tables = sorted({obj.table for obj in objs})

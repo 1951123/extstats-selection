@@ -57,20 +57,37 @@ def test_estimate_census_query(backend):
 
 
 @_NEED_OR
-def test_measure_single_candidate_cleans_up(backend):
+def test_measure_dominant_pair_helps_on_correlated_query(backend):
+    """On a strongly-correlated worst census query, the mcv column-group given
+    by M4 (query.62 -> (iRspouse,iWork89)) materially reduces q-error at full
+    sampling, and the Protocol-A measure leaves no column groups behind.
+
+    This is the honest cross-engine claim (see docs/architecture.md §6.3c): the
+    improvement is query- and sampling-dependent — q0's near-independent
+    predicates are already well estimated by natural single-column stats, so we
+    assert on query.62, not q0.
+    """
+    from extstats2.backend.capabilities import Capacity
+    from extstats2.backend.base import StatObject
+    from extstats2.bench import load_benchmark
     from extstats2.core.candidates import generate_candidates_per_query
     from extstats2.core.measure import measure_query
 
-    q = load_benchmark("census")[0]
-    cands = [c for c in generate_candidates_per_query([q])[q.qid]
-             if set(c.columns) == {"iAvail", "iClass"}]
-    mes = measure_query(backend, q, cands, capacity_levels=(0,))
+    q = load_benchmark("census")[61]  # query.62, truth=45 (very sparse)
+    cands = [c for c in generate_candidates_per_query([q], arities=(2,))[q.qid]
+             if set(c.columns) == {"iRspouse", "iWork89"}]
+    assert cands, "dominant pair candidate required"
+    # measure at capacity level 2 -> Oracle estimate_percent=100 (full sample),
+    # so the dominant pair's column-group histogram is accurate on the sparse
+    # combo. (L0=1% sampling is too coarse for a 45-row target.)
+    mes = measure_query(backend, q, cands, capacity_levels=(2,))
     assert mes.estimate_base > 0
     assert len(mes.candidates) == 1
-    # an mcv column group on (iAvail,iClass) should materially reduce q-error
     for cm in mes.candidates.values():
         for lv in cm.levels.values():
-            assert lv["qerror"] < mes.qerror_base * 0.5
+            assert lv["qerror"] < mes.qerror_base * 0.1, (
+                "dominant pair must materially cut q-error on a sparse "
+                "correlated query")
     # no leftover statistics after a clean measure
     assert backend.list_stats(".climate") == []
 
