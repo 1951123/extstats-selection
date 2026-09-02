@@ -649,6 +649,18 @@ Sec.8 / query.184 已确证：一个稀疏驱动组合在每个容量档的期�
 实现上"把 capacity 扩成 (λ,param) 两维 + 各 backend 声明 λ 如何实现/floor 是否强制"属后续工作
 (不在本次 M-commit 范围)；本小节固定**论点与实证**。
 
+> **研究范围决策（2026-09-02）：单列 target 定死为 100，不是决策变量。** 本项目的正题是
+> **extended statistics（多列相关）**，单列 tuning 不是研究对象。故 PG 把普通列 `attstattarget`
+> 钉死在 `ALTER COLUMN SET STATISTICS 100`（`_ensure_single_columns_pinned`），`default_statistics_target`
+> 恒 100，且**部署时不把单列随 λ/扫描抬上去免费变细**（放弃 Direction A 的 free-rider 用于单列）。
+> 于是：
+> - 单列退居**固定基态反事实**：ext 的 `Δ_is` 与 `e^0_i` 都在"单列=100"下量测——**one-stat
+>   sufficiency 不因 marginal 变化受污染**（sufficiency 是 correlation 层论断，见 v1 论文）；
+> - λ 在 PG 一侧**完全由 ext 对象的 target 决定**（单列恒 100<ext 档，从不成为 max，不抬 λ）；
+> - 逐列提升/单列 free-rider/把单列当第二决策维 等项**不纳入本模型**。
+> λ-carrier（抬 max 的 decoy）仍保留，但**仅服务于"深 λ 而所有真实 ext 对象皆薄"这一 fidelity
+> 场景**，与单列无关。
+
 ---
 
 ## 7. 核心算法 (core/) — 可复用 v1 的部分
@@ -677,6 +689,12 @@ $w_{t,\ell}$，使**每被激活表只付一次固定 ANALYZE 成本**（按其�
 
 > 这是 §6.3(g) 论点 + 一路讨论收敛成的**正式模型 spec**，供后续求解器实现参照；
 > 当前 `core/optimize.py` 仍是 §7 的 per-stat-level 模型，二者在实现上尚未合并。
+
+> **范围声明：本模型的决策空间只含 extended statistics。单列（regular column）target 定死为
+> 100，不是决策变量**（详见 §6.3g 末"研究范围决策"）。单列仅作为固定基态反事实存在——ext 的
+> 每个可行 param $p$、$e^0_i$、$\Delta_{is}$ 都在"单列恒 100"下量测；PG 侧也正是靠单列恒 100
+> （不为 max）让 λ 完全由所选 ext 的 param 决定。故下方所有 $y_{C,p}$ 中的 $C$ 都是**多列组合**，
+> 不含单个列；想要"修单列选择性"不在本模型范围内。
 
 **把 capacity 拆成两个具名轴、各后端声明二者关系**（见 §6.3g、§6.3f）：
 - **λ（表级扫描档）**：一次 ANALYZE/GATHER 采多少行。跨后端它是一个**真·有内容的轴**
