@@ -423,7 +423,7 @@ def measure_candidates(backend, query, cands, protocol=None):
 
 ## 6. 后端细节
 
-### 6.1 PostgreSQL (`backend/postgres.py`) — **已实现（M2，commit 待填）**
+### 6.1 PostgreSQL (`backend/postgres.py`) — **已实现（M2，commit `a353cd5`）**
 - 已移植：`estimate`（EXPLAIN JSON → Plan Rows）、`create/drop/build`（CREATE/
   DROP/ALTER STATISTICS + ANALYZE）、`stat_size_bytes`（pg_statistic_ext_data）、
   `list_stats`（stxkeys → 列解析）、`isolate`（**Protocol-A**，异常安全恢复）、
