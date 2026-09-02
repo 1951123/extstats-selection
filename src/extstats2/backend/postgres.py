@@ -40,9 +40,9 @@ from .capabilities import Capability, Capacity
 # ---------------------------------------------------------------------------
 
 _CAPABILITIES = [
-    Capability("dependency", "dependencies", "statistics_target", True),
-    Capability("ndistinct", "ndistinct", "statistics_target", True),
-    Capability("mcv", "mcv", "statistics_target", True),
+    Capability("dependency", "dependencies", "statistics_target", True, False),
+    Capability("ndistinct", "ndistinct", "statistics_target", True, False),
+    Capability("mcv", "mcv", "statistics_target", True, True),  # primary
 ]
 
 # Per-kind payload column in pg_statistic_ext_data.

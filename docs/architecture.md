@@ -363,7 +363,17 @@ class Capability:
     native_kind: str               # e.g. PG: "dependencies"; Oracle: "column_group"
     # Capacity model: how 'capacity' is materialised in this backend.
     capacity_param: str            # e.g. "statistics_target" | "estimate_percent"
+    supported: bool = True
+    primary: bool = False          # core capability (repairs selection cardinality)
 ```
+
+**收敛：MCV 是核心能力（`primary`）。** v1 实证表明，修复*选择谓词基数 (selection
+cardinality)* 的 q-error 只有**多列值分布**这一能力（PG `mcv` / Oracle column-group
+histogram）直接有效——`ndistinct` 改善的是 distinct-count 估算、`dependencies` 只
+消特定函数依赖，对本目标的贡献有限/间接。因此 v2 把该能力标记 `primary=True`，
+**默认测量（`measure_query` 不指定 capabilities 时）只 probe `primary` 能力**（见
+`default_measure_capabilities`）。`dependency`/`ndistinct` 仍可声明/支持，但不作为
+测量主力。
 
 core 只谈论 `Capability`（`dependency/ndistinct/mcv`）和**抽象的容量值**
 （归一化如 `0..1` 的采样强度或级别索引），由后端换算成具体参数。这使

@@ -94,7 +94,15 @@ def measure_query(
     )
 
     supported = {c.name: c for c in backend.supported_capabilities() if c.supported}
-    wanted = capabilities or list(supported.keys())
+    all_caps = list(backend.supported_capabilities())
+    if capabilities is None:
+        # default: probe only the backend's `primary` capabilities (v1 evidence:
+        # only the multi-column value-distribution capability repairs selection
+        # cardinality q-error). Falls back to all supported if none is primary.
+        from ..backend.capabilities import default_measure_capabilities
+        wanted = default_measure_capabilities(all_caps)
+    else:
+        wanted = list(capabilities)
     wanted = [name for name in wanted if name in supported]
 
     def _capacity(level: int) -> Capacity:

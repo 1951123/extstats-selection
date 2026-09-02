@@ -28,8 +28,10 @@ from ..core.queries import BenchQuery
 _CAPABILITIES = [
     # dependency: not implemented in the first cut.
     Capability("dependency", "none", "n/a", supported=False),
-    Capability("ndistinct", "column_group", "estimate_percent", True),
-    Capability("mcv", "column_group", "estimate_percent", True),
+    Capability("ndistinct", "column_group", "estimate_percent", True, False),
+    # primary: Oracle column-group statistics (multi-column histogram) repair
+    # selection cardinality, mirroring PG mcv.
+    Capability("mcv", "column_group", "estimate_percent", True, True),
 ]
 
 

@@ -42,20 +42,36 @@ class Capability:
         Whether this backend can actually build the capability. A backend may
         declare a canonical capability but mark it unsupported (e.g. Oracle
         ``dependency`` in the first cut).
+    primary:
+        Whether this capability is the *core* one that directly repairs
+        selection cardinality q-error. Empirical evidence (v1) shows only the
+        multi-column value-distribution capability (PG ``mcv`` / Oracle column
+        group histogram) directly fixes selection cardinality; the others
+        (dependency/ndistinct) are secondary. By default, measurement probes
+        only ``primary`` capabilities.
     """
 
     name: str
     native_kind: str
     capacity_param: str
     supported: bool = True
+    primary: bool = False
 
     def __str__(self) -> str:
         flag = "" if self.supported else " (unsupported)"
-        return f"{self.name}<{self.native_kind}/{self.capacity_param}>{flag}"
+        mark = "*" if self.primary else ""
+        return f"{mark}{self.name}<{self.native_kind}/{self.capacity_param}>{flag}"
 
 
 # Canonical cross-backend capability names (the only ones core understands).
 CANONICAL_CAPABILITIES = ("dependency", "ndistinct", "mcv")
+
+
+def default_measure_capabilities(caps: list["Capability"]) -> list[str]:
+    """Return the capability names to measure by default: the `primary` ones,
+    or all supported ones if none is marked primary."""
+    prim = [c.name for c in caps if c.primary and c.supported]
+    return prim or [c.name for c in caps if c.supported]
 
 
 # ---------------------------------------------------------------------------
