@@ -626,17 +626,28 @@ Sec.8 / query.184 已确证：一个稀疏驱动组合在每个容量档的期�
 1. **param 轴确实存在且有独立上限**：target 超过饱和点后采样已全表不变，MCV_items 封在
    19、qerr 不再改善——"采样已够捕获，加表示无益"。表示精度本身是一个独立、且**非单调**的
    维度：不是越细越好，饱和/超参后反而出现低频尾噪声（5000/8193 → qerr 2.5–2.8 走差）。
-2. **PG 用一个 `statistics_target` 把 (λ, param) 耦合**：它既经 `targrows≈300·target` 拨采样
-   行，又设 MCV-item 上限/直方图桶数。要单独抬 param 而不动样本、或反之，PG 原生做不到
-   ——λ 与 param 在 PG 内部通过"同一算子的 max 抽样 + 同一 target 上限"锁死。
-3. **Oracle 天然分离**：`estimate_percent`(≈采样/λ) 与 `SIZE buckets`(≈param) 是两个独立
-   GATHER 参数，反而是"两轴分开"的正确形态参照。
+2. **PG 用一个 `statistics_target` 把 (λ, param) 耦合，且是"统计上有依据"的耦合**：它既经
+   `targrows≈300·target` 拨采样行，又把同一 target 设成该对象的桶数/MCV 上限。PG 的
+   `minrows = 300·target`（`analyze.c` 引 Chaudhuri–Motwani–Narasayya SIGMOD'98）给出
+   **表示参数的一个样本下界：要 `k` 桶可信须采约 `300k` 行**。故该耦合不是纯实现巧合：PG 用一个
+   `statistics_target` 同时表达了"采样档 λ"和"表示参数"，并把两者绑进**一条 engine 强制的
+   Chaudhuri floor** —— 你**不能**要求"细 param + 浅样本"(Direction B)，那在统计上自相矛盾
+   (细桶无足够独立样本填充)；你**可以**利用的是另一侧(Direction A)：凡是某对象已把扫描抬深，
+   其余薄对象就从同一份共享深样本里"免费"取更稳的粗桶(见 §7bis λ-carrier)。
+3. **Oracle 不强制这条 floor，λ/param 是真·解耦的两个 GATHER 参数**：`estimate_percent`(≈采样/λ,
+   表级每 GATHER 全局、可直接设)与 `SIZE buckets`(≈param, 逐列组)独立；engine 允许"细桶+浅扫"
+   (PG 拒绝的 Direction B)——是否统计健全**不被 engine 兜底，留作优化器层的可选护栏**。
 
-**对 v2 的意义**：capacity 轴在**抽象/跨后端**上应表达为 $(λ, param)$ 两个维度（即便 PG
-执行时受物理耦合只能近似表达其二）；成本也分开——λ 主导扫描成本、param 主导存储/表示
-成本。Oracle 现有的 `[estimate_percent, buckets]` 已贴近该形态；PG 的"一个旋钮干两件事"
-在解耦后的模型里应显式变回两个概念。本小节先固定**论点与实证**，代码层把 capacity 扩成
-两维属后续工作（不在本次 M-commit 范围）。
+**对 v2 的意义**：capacity 在**抽象/跨后端**上是两个**具名轴** (λ, param)，但它们之间的关系是
+**backend 依赖的，不是一个普适等式**——这正是 backend 抽象该承载的部分：
+- **PG**：λ 不是可直接设的自由量，而是**经 `300·max(param)` 由所选对象实现**的编码受限量；
+  其 Chaudhuri floor 由 **engine 强制**；要"深 λ 而全薄对象"须显式加 **λ-carrier**(抬 max)。
+- **Oracle**：λ=`estimate_percent` 直接、独立、表级全局；param=`buckets` 解耦；floor **不强制**，
+  若也要统计健全则它是 model 层的可选护栏(数据相关，非铁律)。
+切忌把任一侧的形态当作普适模型：既不要把 PG 的"λ 由 max param 派生"当成到处成立(对 Oracle 错)，
+也不要把 Oracle 的"两轴完全自由"当成到处成立(对 PG 只能近似表达 λ)。
+实现上"把 capacity 扩成 (λ,param) 两维 + 各 backend 声明 λ 如何实现/floor 是否强制"属后续工作
+(不在本次 M-commit 范围)；本小节固定**论点与实证**。
 
 ---
 
@@ -667,26 +678,46 @@ $w_{t,\ell}$，使**每被激活表只付一次固定 ANALYZE 成本**（按其�
 > 这是 §6.3(g) 论点 + 一路讨论收敛成的**正式模型 spec**，供后续求解器实现参照；
 > 当前 `core/optimize.py` 仍是 §7 的 per-stat-level 模型，二者在实现上尚未合并。
 
-**把 capacity 拆成两轴**（见 §6.3g、§6.3f）：
-- **λ（表级扫描档）**：一次 ANALYZE/GATHER 采多少行，是**表级 / 部署全局**的决策
-  （PG `targrows≈300·target`、Oracle `estimate_percent`），主导一次扫描的 fixed 维护成本，
-  并决定 fidelity（能否捕获驱动组合）。
+**把 capacity 拆成两个具名轴、各后端声明二者关系**（见 §6.3g、§6.3f）：
+- **λ（表级扫描档）**：一次 ANALYZE/GATHER 采多少行。跨后端它是一个**真·有内容的轴**
+  （Oracle `estimate_percent` 是可直接设、独立的表级全局 GATHER 参数；PG 则是经
+  `targrows≈300·target` 由所选对象实现、需另述的编码受限量）。λ 主导一次扫描的 fixed
+  维护成本，并决定 fidelity（能否捕获驱动组合）。
 - **param（统计表示参数）**：每个统计对象的表示细节（MCV 项 / 直方图桶数），是**逐对象**
   决策，主导该对象的存储与其表示误差；非单调（捕获已足后再加并不更优，§6.3g）。
 
-**决策变量**（内层，给定外层 λ 后）：对列组 $C$、可选 param $p$：
-$$y_{C,p}\in\{0,1\}\ (\text{建一个 param=}p\text{ 对象}),\qquad x_{i,(C,p)}\le y_{C,p}.$$
-λ **不进入对象下标**——它由外层给定，同一表的所有被选统计共享该次布局的 λ。
+**λ 与 param 不是完全正交、绑定与否是 backend 声明属性。** 抽象层保留两个具名轴；每个
+backend 在其编码层声明：(a) **λ 如何被实现**——PG: $\lambda=300\cdot\max_s p_s$（被所选对象
+抬到哪算哪，故"深 λ 但全薄对象"须加 **λ-carrier**）；Oracle: $\lambda$=直接输入的
+`estimate_percent`。(b) **Chaudhuri floor 是否强制** $\lambda\ge300\,\max_s p_s$（保证每个
+param 都有足量独立样本支撑）——PG: engine `minrows` 强制；Oracle: 不强制，"细桶+浅扫"
+(Direction B) 可表达，是否采用是优化器层可选护栏。核心逻辑（objective/query-level
+fidelity/保守化）不改，只把该绑定当作一笔由 backend 提供的**可行性/成本**输入。
 
-**内层（给定全局 λ，固定/共享扫描在此 λ）**——选 (列组, param) 以最小化保守的 workload 目标：
+**决策变量**（内层，给定表级 λ 后）：对列组 $C$、可选 param $p$：
+$$y_{C,p}\in\{0,1\}\ (\text{建一个 param=}p\text{ 对象}),\qquad x_{i,(C,p)}\le y_{C,p}.$$
+λ 是**表级量，不进对象下标**：同一表所有被选统计共享该布局的 λ。param 的可选集合被该表的
+λ-bind（§6.3g）切出上界——PG 侧 $p\le\lambda/300$（engine 已强制，故 optimizer 只需在预扫网格
+里**不 offer 越界组合**）；Oracle 侧无 engine 上界，是否把 $p$ 限制在 $\lambda/300$ 由 optimizer
+作为可选护栏决定。
+
+**内层（给定每表 λ，固定/共享扫描在此 λ）**——选 (列组, param) 以最小化保守的 workload 目标：
 $$\min\ \underbrace{\tfrac1{|Q|}\sum_i \hat e_i^{(\lambda,T_i)}}_{\text{query-level, 见 fidelity}}
 \quad\text{s.t.}\quad
 \begin{cases}
 \sum_p y_{C,p}\le 1,\\
 x_{is_a}+x_{is_b}\le 1\ (\text{查询内重叠, 乘性近似可信前提}),\\
+p\ \text{可行域受该表 λ-bind(§6.3g)},\\
 \sum_{C,p} c^{(\text{param})}_{C,p}\,y_{C,p}\le B,\\
-\text{fixed 维护}=\text{常数(本 λ)}, \quad \text{var 维护}=\sum \text{var}^{(\text{param})}y.
+\text{fixed 维护}=f_t(\lambda_t)\ \text{每被激活表一次},\quad \text{var 维护}=\sum \text{var}^{(\text{param})}y.
 \end{cases}$$
+
+> **PG 的 λ 编码（可选分支）**：PG 无"SET λ"扫描旋钮，表级 λ 由所选对象经 `max(param)` 实现。
+> 若把决策直接写为逐对象 param，则每表 $\lambda_t=300\cdot\max_s p_s$ 是**派生量**（写进
+> $f_t$ 与 fidelity）；表达"深 λ、无真实对象愿扛"时加一个 **λ-carrier**（抬 max 的 stat，
+> 测量后 mask/drop，见 §6.3f/Protocol-M）即可。Oracle 则直接把 $\lambda_t$=`estimate_percent`
+> 当输入旋钮，无需 carrier。两分支都由同一 core objective/fidelity 消费，差异只在 backend 的
+> "λ 如何实现/是否需 carrier"编码层。
 
 **query-level 的 fidelity → 不硬删、保守化。** λ 是否够捕获是**逐查询**量
 $\lambda_{q}=\mathrm{truth}_q\cdot\mathrm{sample}_N(\lambda)/N_t$。**不作为硬删**：
@@ -695,14 +726,19 @@ $\lambda_{q}=\mathrm{truth}_q\cdot\mathrm{sample}_N(\lambda)/N_t$。**不作为�
 
 **外层**——对 λ∈Λ 各解一遍内层 MILP，比较时计入"这次部署的 fixed 扫描成本"，取：
 $$\min_{\lambda\in\Lambda}\ \Big[\ \text{innerObj}^{(\lambda)}\ (\text{已含 query-level 保守化}) \
-+\ \rho\,\text{maintFixed}^{(\lambda)}\ \Big].$$
++\ \sum_t \rho_t\,f_t(\lambda_t)\ \Big].$$
 不做**整档一刀切拒绝**：某 λ 恰使某个(些)query 落入低 fidelity 时，该 λ 只是在这些 query 上
-保守化偏高、从而在 cost 权衡下自然不敌更大 λ；它不会被从 Λ 里删掉。
+保守化偏高、从而在 cost 权衡下自然不敌更大 λ；它不会被从 Λ 里删掉。这里的 $\lambda_t$ 是**每表**
+的扫描档：Oracle 是可直接输入的 `estimate_percent` 档；PG 在逐档预扫时经"把该表对象设到
+对应 target、其余 ≤ 该值使 max=该档"来实现（与 §6.3f 的按 tier 固定扫描成本一致）。
+PG 若想表达"λ 深、无真实对象愿扛"，再加 λ-carrier 即可（见上"PG 的 λ 编码"框）。
 
-**λ 的离散化**：预测量原则(§1.1-1.8)——不允许"边解边补测 "。故 Λ 不取连续全采样，
-而是**少数离散表级扫描档**(沿用现有 ladder 档，如 B 起步：现有 {10,100,1000,…} 或
-Oracle {1,10,100}%)，每个 λ 下对全部候选×param 完整预扫；是否按 fidelity 边界(ω≈1/5)加密
-各 λ 档留作数据驱动的后续开点，不硬编码 ladder。
+**λ 的离散化与 param 预扫网格**：预测量原则(§1.1-1.8)——不允许"边解边补测"。故 Λ 取
+**少数离散表级扫描档**(沿用现有 ladder，如现有 {10,100,1000,…} 或 Oracle {1,10,100}%)，
+每个 λ 档下对全部候选×param 预扫。**param 的上界被该表 λ-bind 切掉**(§6.3g)：PG 只预扫
+$p\le\lambda/300$（engine 已强制，越界组合本就不可建）；Oracle 无 engine 上界，可按需把
+护栏杆 $p\le\lambda/300$ 作为可选施加。是否按 fidelity 边界(ω≈1/5)加密各 λ 档留作数据驱动的
+后续开点，不硬编码 ladder。
 
 **骨架验证（PG，Census）**：对 3 条最坏相关查询的已知主导对，测其在各扫描档 target
 (=statistics_target) 下的 q-error 与 λ（PG 耦合限制：λ/param 同由 target 携带，故逐档
