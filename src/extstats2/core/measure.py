@@ -122,6 +122,9 @@ def measure_query(
                 estimates: list[int] = []
                 for _ in range(repeats):
                     with backend.isolate({stat}, cand.table):
+                        # ensure the candidate statistic exists before building
+                        # (isolate keeps `stat` active; create is idempotent).
+                        backend.create_stat(stat)
                         backend.build_stats([stat], _capacity(level))
                         est = backend.estimate(query)
                         sizes.append(backend.stat_size_bytes(stat))

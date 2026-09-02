@@ -423,13 +423,19 @@ def measure_candidates(backend, query, cands, protocol=None):
 
 ## 6. 后端细节
 
-### 6.1 PostgreSQL (`backend/postgres.py`)
-- 直接移植 v1 的 Protocol-A (`measure.py`)、Protocol-M (`measure_mask.py`)、
-  `estimate.py`、`stats.py`、`catalog` 查询。
-- 唯一变化是把函数签名切到抽象基类，SQL 字符串留在后端内部。
-- `has_protocol_m() == True`（这是 PG 独有的加速，暴露为可选能力）。
+### 6.1 PostgreSQL (`backend/postgres.py`) — **已实现（M2，commit 待填）**
+- 已移植：`estimate`（EXPLAIN JSON → Plan Rows）、`create/drop/build`（CREATE/
+  DROP/ALTER STATISTICS + ANALYZE）、`stat_size_bytes`（pg_statistic_ext_data）、
+  `list_stats`（stxkeys → 列解析）、`isolate`（**Protocol-A**，异常安全恢复）、
+  `maintain_cost`（fixed+var 模型估计）、backend 自有 capacity ladder
+  （level→statistics_target）。
+- **Protocol-M（catalog-mask）为后续增强**：当前 `has_protocol_m() == False`，
+  `isolate()` 走通用 Protocol-A（drop/rebuild）。这是 PG 独有的加速，待实现
+  CatalogDriver over `pg_statistic_ext_data` 后改为 True 并启用 mask。
+- 连接：psycopg 惰性连接，autocommit；`default_statistics_target` 由
+  `set_capacity`/`build_stats` 控制。
 
-### 6.2 Oracle (`backend/oracle.py`)
+### 6.2 Oracle (`backend/oracle.py`) — **尚未实现（M3）**
 - **统计对象**: 用 Oracle 的 **column group statistics**（12c+ 通过
   `DBMS_STATS.GATHER_TABLE_STATS` 的 `METHOD_OPT -> FOR COLUMNS (a,b,c)`，
   或用 `DBMS_STATS.CREATE_EXTENDED_STATS` 显式创建扩展统计）。每个列组产生一个

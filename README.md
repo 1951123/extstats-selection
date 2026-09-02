@@ -53,7 +53,9 @@ for the full design.
 
 - [x] M1 scaffolding: abstractions (`base`/`capabilities`/`catalog`), core port
       (`optimize`, `candidates`, `predicates`, `measure`), config, CLI, design doc.
-- [ ] M2 PostgreSQL backend (port v1 measurement + mask protocol).
+- [x] M2 PostgreSQL backend: estimate, DDL (create/drop/build), size, list,
+      Protocol-A isolate (exception-safe), backend-owned capacity ladder,
+      fixed+var `maintain_cost`. Protocol-M catalog-mask is a later enhancement.
 - [ ] M3 Oracle backend (column groups + Protocol-A).
 - [ ] M4 cross-backend validation (same core on PG & Oracle).
 
