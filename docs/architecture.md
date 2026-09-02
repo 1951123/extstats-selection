@@ -312,7 +312,7 @@ src/extstats2/
 │   └── protocol_m.py         #   mask 协议（仅 PG；通过 backend.measure_flags 声明支持）
 │
 ├── bench/                    #   基准加载（通用查询 + ground truth 格式）
-│   └── loaders.py            #   census / job / stats_ceb 等 loader（沿用 v1 parsers）
+│   └── loaders.py            #   census / stats_ceb / stats_ceb_single 等 loader（沿用 v1 parsers）
 │
 ├── cli.py                    #   CLI 入口（bench -> measure -> optimize -> verify）
 └── config.py                 #   路径 / 后端选择 / 预算等配置
@@ -470,7 +470,7 @@ def measure_candidates(backend, query, cands, protocol=None):
 @dataclass
 class Config:
     backend: str            # "postgres" | "oracle"（可扩展）
-    bench: str              # census | job | stats_ceb
+    bench: str              # census | stats_ceb | stats_ceb_single
     budget_bytes: int
     capacities: tuple[...]  # 通用容量级别（core 侧）
     protocol: str | None    # None = 后端自动选 a/m

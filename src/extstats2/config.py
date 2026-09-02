@@ -89,9 +89,10 @@ class DBConfig:
 
 
 # Default database per benchmark (matches init_*.sh conventions).
+# v2 supports Census and stats_CEB (incl. its single-table sub-plans);
+# JOB is dropped (join-heavy, extended statistics cannot fix join error).
 DEFAULT_DB = {
     "census": "census",
-    "job": "imdb",
     "stats_ceb": "stats",
     "stats_ceb_single": "stats",
 }

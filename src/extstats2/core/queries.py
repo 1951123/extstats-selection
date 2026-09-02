@@ -16,7 +16,7 @@ from typing import Optional, Protocol
 class BenchQuery:
     """One parsed query from a benchmark."""
 
-    bench: str                       # "census" | "job" | "stats_ceb" | ...
+    bench: str                       # "census" | "stats_ceb" | "stats_ceb_single"
     qid: str                         # short id, e.g. "1a", "query.1"
     sql: str                         # SQL text (without the ground-truth suffix)
     ground_truth: Optional[int] = None

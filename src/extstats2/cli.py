@@ -19,7 +19,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="extstats2", description=__doc__)
     p.add_argument("--backend", choices=["postgres", "oracle"], default="postgres")
     p.add_argument("--bench", default="census",
-                   choices=["census", "job", "stats_ceb", "stats_ceb_single"])
+                   choices=["census", "stats_ceb", "stats_ceb_single"],
+                   help="benchmark (JOB dropped: join-heavy, extended stats cannot fix join error)")
     p.add_argument("--budget-bytes", type=int, default=0, help="storage budget (0=unlimited)")
     p.add_argument("--maint-budget", type=float, default=None,
                    help="maintenance budget for the ILP (None/0=unconstrained)")
