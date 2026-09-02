@@ -226,6 +226,9 @@ class PostgresBackend(Backend):
         # backend-owned capacity ladder: level index -> statistics_target
         self._ladder = dict(capacity_ladder or DEFAULT_CAPACITY_LADDER)
         self._conn: Optional[Connection] = None
+        # tables whose regular (single) columns we have already pinned to
+        # _SINGLE_COL_STATISTICS_TARGET on this connection (cache: pin once).
+        self._pinned_single: set[str] = set()
 
     # -- connection --------------------------------------------------------
 
@@ -320,25 +323,35 @@ class PostgresBackend(Backend):
     def restore_natural_stats(self, table: str, **_) -> None:
         """Restore PG's natural per-column statistics baseline (single ANALYZE).
 
-        PostgreSQL's plain ``ANALYZE`` builds normal single-column histograms /
-        stats. This represents the honest "no extended statistics" baseline; it
-        is a parity helper mirroring ``OracleBackend.restore_natural_stats`` so
-        the cross-backend harness measures both engines from natural stats.
+        Single columns are pinned to their default target (100, ALTER COLUMN) so
+        the "no extended statistics" baseline is a deterministic, per-column
+        natural state; a plain ANALYZE then rebuilds it. A parity helper
+        mirroring ``OracleBackend.restore_natural_stats``.
         """
+        self._ensure_single_columns_pinned(table)
         with self.conn.cursor() as cur:
             cur.execute(f"ANALYZE {_clean_table(table)}")
 
     def build_stats(self, objs: list[StatObject], capacity: Capacity) -> None:
-        """Set per-object targets, then ANALYZE each distinct base table once."""
+        """Set the extended-stat target, pin single columns to 100, ANALYZE once.
+
+        Decided semantics: regular single columns stay at their pinned target
+        (100); only the extended statistics' own target varies via
+        ``ALTER STATISTICS ... SET STATISTICS``. We do NOT raise the global
+        ``default_statistics_target`` to the extended target (that would also
+        resample every single column and couple single-col statistics to the
+        capacity axis).
+        """
         tables = sorted({obj.table for obj in objs})
         target = self._native_target(capacity)
+        for tbl in tables:
+            self._ensure_single_columns_pinned(tbl)
         with self.conn.cursor() as cur:
             for obj in objs:
                 cur.execute(
                     f"ALTER STATISTICS {self._q(obj.name)} "
                     f"SET STATISTICS {int(target)}"
                 )
-        self._set_default_target(target)
         for tbl in tables:
             with self.conn.cursor() as cur:
                 cur.execute(f"ANALYZE {_clean_table(tbl)}")
@@ -467,6 +480,46 @@ class PostgresBackend(Backend):
     _W_PER_TARGET = 0.00256          # s per statistics_target unit (linear region)
     _VAR_PER_STAT_T1000 = 0.02       # s per added statistic @ statistics_target 1000
     _RELTUPLES_CACHE: dict[str, float] = {}
+    # Decided deployment semantics (2026-09-02): single (regular) columns stay
+    # pinned at this statistics_target via `ALTER TABLE ... ALTER COLUMN SET
+    # STATISTICS`; only the *extended* statistic's target varies. targrows then
+    # has a floor of ~300*this per the ANALYZE scan.
+    _SINGLE_COL_STATISTICS_TARGET = 100
+
+    # ---- single-column target pinning ---------------------------------
+    def _ensure_single_columns_pinned(self, table: str) -> None:
+        """Pin every regular column of ``table`` to the single-col target (100).
+
+        This makes per-column base statistics deterministic across extended-stat
+        builds and establishes the targrows floor (max(300*100, 300*target)).
+        Pinning is per (connection, table) and cached. Extended-stat hidden
+        columns are excluded (they don't take an ALTER COLUMN target).
+        """
+        base = _clean_table(table).rpartition(".")[2]
+        if base in self._pinned_single:
+            return
+        tgt = int(self._SINGLE_COL_STATISTICS_TARGET)
+        with self.conn.cursor() as cur:
+            # keep the connection default at 100 so any not-explicitly-pinned
+            # column defaults to the single-col target as well
+            cur.execute(f"SET default_statistics_target = {tgt}")
+            cur.execute(
+                "SELECT a.attname FROM pg_attribute a "
+                "JOIN pg_class c ON c.oid = a.attrelid "
+                "WHERE c.relname = %s AND a.attnum > 0 AND NOT a.attisdropped "
+                "AND a.attidentity = '' AND a.attgenerated = ''",
+                (base,))
+            cols = [r[0] for r in cur.fetchall()]
+        for col in cols:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(
+                        f"ALTER TABLE {_clean_table(table)} "
+                        f"ALTER COLUMN {col} SET STATISTICS {tgt}")
+            except Exception:
+                # skip columns that cannot take a per-column target
+                pass
+        self._pinned_single.add(base)
 
     def _reltuples(self, table: str) -> float:
         """Estimated row count of ``table`` from pg_class (lazily cached)."""
@@ -525,17 +578,19 @@ class PostgresBackend(Backend):
     def sample_rows_per_level(self, table: str, level: int) -> Optional[float]:
         """Expected ANALYZE sample rows at a capacity tier (targrows semantics).
 
-        PostgreSQL's sample row count for statistics is ``targrows ≈ ...`` on
-        the order of ``300 * statistics_target``, capped at the table's row
-        count (full scan). Returns ``None`` for an unknown ``level`` / row count.
+        With single columns pinned to ``_SINGLE_COL_STATISTICS_TARGET`` (=100),
+        ANALYZE scans ``targrows = max(300*100, 300*target)`` (the single-col
+        default floors it), capped at the table's row count for a full scan.
+        Returns ``None`` for an unknown level / row count.
         """
         if level not in self._ladder:
             return None
         target = int(self._ladder[level])
+        targrows = 300.0 * max(target, int(self._SINGLE_COL_STATISTICS_TARGET))
         n = self._reltuples(table)
         if n <= 0:
             return None
-        return float(min(300.0 * target, n))
+        return float(min(targrows, n))
 
     def num_rows(self, table: str) -> Optional[float]:
         n = self._reltuples(table)

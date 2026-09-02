@@ -145,3 +145,48 @@ def test_capacity_ladder_mapping(backend):
         obj = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
                          capacity=Capacity(lvl))
         assert backend._native_target(obj.capacity) == expected
+
+
+@_NEED_PG
+def test_single_col_pin_and_sample_floor(backend):
+    """Decided deployment semantics: regular (single) columns are pinned to
+    statistics_target=100 via ALTER COLUMN SET STATISTICS, so (a) building an
+    extended statistic at a high target must NOT raise the connection's
+    default_statistics_target, and (b) the ANALYZE sample has a floor of ~300*100
+    regardless of how low a hypothetical extended target goes. This decouples the
+    per-extended-stat representation parameter from regular-column fidelity.
+    """
+    mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
+    obj = StatObject(table=".climate", columns=("iAvail", "iClass"),
+                     capability=mcv, capacity=Capacity(2),  # target 10000
+                     name="ext_m_pin_test")
+    backend.create_stat(obj)
+    backend.build_stats([obj], Capacity(2))
+    try:
+        # (a) regular single column stays pinned at 100 even after a 10000 build
+        with backend.conn.cursor() as cur:
+            cur.execute(
+                "SELECT a.attstattarget FROM pg_attribute a "
+                "JOIN pg_class c ON c.oid = a.attrelid "
+                "WHERE c.relname = 'climate' AND a.attname = 'iavail'")
+            st = cur.fetchone()[0]
+            assert st == 100, f"single column not pinned: attstattarget={st}"
+            # the connection default must not have been dragged to 10000
+            cur.execute("SHOW default_statistics_target")
+            dflt = int(cur.fetchone()[0])
+            assert dflt == 100, (
+                f"default_statistics_target raised to {dflt}; only ext target "
+                "should vary")
+        # (b) sub-100 extended target is floored at 300*100 = 30000 sample rows
+        n = backend._reltuples(".climate")
+        saved = backend._ladder
+        try:
+            backend._ladder = {0: 50, 1: 100}  # synthetic sub-100 tier
+            assert backend.sample_rows_per_level(".climate", 0) == 30000.0
+            assert backend.sample_rows_per_level(".climate", 1) == 30000.0
+        finally:
+            backend._ladder = saved
+            assert backend.num_rows(".climate") == n or n > 0
+    finally:
+        backend.drop_stat(obj)
+    assert backend.list_stats(".climate") == []
