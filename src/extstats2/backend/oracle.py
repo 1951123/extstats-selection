@@ -431,6 +431,38 @@ class OracleBackend(Backend):
         """Marginal per-statistic refresh cost (payload only), seconds."""
         return _VAR_PER_STAT_S
 
+    def sample_rows_per_level(self, table: str, level: int) -> Optional[float]:
+        """Expected GATHER sample rows at a capacity tier.
+
+        Oracle samples ``estimate_percent/100`` of the table's rows per scan. The
+        whole table shares one scan (per_scan capacity model), so this is the
+        sampling the column-group statistic sees at ``level``.
+        """
+        if level not in self._ladder:
+            return None
+        params = self._ladder[level]
+        ep = float(params["estimate_percent"]) / 100.0
+        n = self._num_rows(table)
+        if n <= 0:
+            return None
+        return float(ep * n)
+
+    def num_rows(self, table: str) -> Optional[float]:
+        n = self._num_rows(table)
+        return None if n <= 0 else float(n)
+
+    def _num_rows(self, table: str) -> float:
+        tname = self._q_table(table)
+        try:
+            with self._cur() as cur:
+                cur.execute(
+                    "SELECT num_rows FROM user_tables WHERE table_name=:t",
+                    {"t": tname})
+                row = cur.fetchone()
+            return float(row[0]) if row and row[0] else 0.0
+        except Exception:
+            return 0.0
+
     def _relrows_scale(self, table: str) -> float:
         """Scale factor vs the calibration table (CLIMATE ~2.46M rows)."""
         tname = self._q_table(table)

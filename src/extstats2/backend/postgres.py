@@ -522,6 +522,25 @@ class PostgresBackend(Backend):
         arity_f = 1.0 + 0.1 * max(len(obj.columns) - 2, 0)
         return float(self._VAR_PER_STAT_T1000 * (t / 1000.0) * arity_f)
 
+    def sample_rows_per_level(self, table: str, level: int) -> Optional[float]:
+        """Expected ANALYZE sample rows at a capacity tier (targrows semantics).
+
+        PostgreSQL's sample row count for statistics is ``targrows ≈ ...`` on
+        the order of ``300 * statistics_target``, capped at the table's row
+        count (full scan). Returns ``None`` for an unknown ``level`` / row count.
+        """
+        if level not in self._ladder:
+            return None
+        target = int(self._ladder[level])
+        n = self._reltuples(table)
+        if n <= 0:
+            return None
+        return float(min(300.0 * target, n))
+
+    def num_rows(self, table: str) -> Optional[float]:
+        n = self._reltuples(table)
+        return None if n <= 0 else float(n)
+
     @staticmethod
     def _q(name: str) -> str:
         """Double-quote a statistic object name."""

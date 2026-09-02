@@ -279,6 +279,29 @@ class Backend(ABC):
         """
         return 0.0
 
+    # -- sampling / fidelity contract (v1 "λ" expected-capture) -----------
+
+    def sample_rows_per_level(self, table: str, level: int) -> Optional[float]:
+        """Expected number of table rows one ANALYZE/GATHER samples at ``level``.
+
+        This is the denominator for v1's ``λ`` ("expected capture") statistic:
+        for a query that filters down to ``truth`` rows on a table of ``N`` rows,
+        the driving combination is expected to appear in the statistic's sample
+        ``lambda_expected = (truth / N) * sample_rows`` times.  When
+        ``lambda_expected`` is far below 1, a single ANALYZE *may not even see*
+        the combination, so the measured q-error is high-variance / unreliable
+        (v1 Sec.8 "fidelity" / query.184); when it is well above 1 the
+        measurement is faithful.  This is a data/`level` property the core can
+        reason about without knowing the engine's sampling formula.
+
+        Returns ``None`` when the backend cannot estimate it for ``table``.
+        """
+        return None
+
+    def num_rows(self, table: str) -> Optional[float]:
+        """Estimated row count of ``table`` (None if unknown)."""
+        return None
+
     # -- isolation ---------------------------------------------------------
 
     @abstractmethod

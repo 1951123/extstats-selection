@@ -589,6 +589,23 @@ Oracle 抽验）。结果 JSON 落在 `results/`。
 （表级共享扫描假设由 MaintProfile 的 Y-two-layer 承担）；不一致风险收敛到"部署要复现
 per-object target"，而非"要复现 base 档"。
 
+**(f) 采样保真度（λ）契约 — v1 fidelity 纳入 v2（记录+契约阶段）。** v1 的
+Sec.8 / query.184 已确证：一个稀疏驱动组合在每个容量档的期望采样次数
+`λ = (truth/N)×sample_rows(level)` 决定该档读数是否可靠 —— λ≪1 时 MCV/列组直方图
+**是否捕获该组合是随机二值** → 单次 ANALYZE 的 q-error **高方差**、Protocol-M 的低容量
+数字系统性过于乐观；λ≳5 才保真。这在 v2 中作为跨后端"能力契约"落地：
+
+- `Backend.sample_rows_per_level(table, level)`（PG ≈ `min(300·statistics_target, N)`；
+  Oracle ≈ `estimate_percent%·N`）+ `Backend.num_rows(table)`；两引擎都实现。
+- `core/measure.measure_query` 在**每个 (候选, level)** 输出新增 `lambda_expected`、
+  `qerror_std`、`qerror_worst`（repeat>1 时）——把不确定度本身变成测量观测，而非只记
+  均值。PG query.62 实测：L0 λ≈0.55 <1 → repeats [1.5,2.1,4.8] 高方差；L1 λ≈5.5 →
+  低方差且最优（1.48）；L2 λ≈45 → 恒被捕获但非单调回落（2.5）。
+
+当前为**记录与契约**阶段（选项③第一步）：λ/方差进入产出的 phase1 字段。让优化器消费
+（如在 λ<1 档不自信/罚乐观、用 λ 或方差校正后收益而非均值）留作下一阶段；每个数据集/容量档
+的敏感区间差异性（Census 小档、CEB 大档）也在该字段上可被探测，不必硬编码 ladder。
+
 ---
 
 ## 7. 核心算法 (core/) — 可复用 v1 的部分

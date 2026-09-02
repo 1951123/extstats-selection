@@ -148,8 +148,16 @@ def measure_query(
                     "estimate": estimates[0],
                     "qerror": _mean(qerrs),
                     "qerror_repeats": qerrs,
+                    "qerror_std": _stdev(qerrs),
+                    "qerror_worst": _max(qerrs),
                     "size_bytes": _mean_int(sizes),
                     "maint_cost": backend.stat_maintain_var(stat),
+                    # v1 "lambda": expected # of the query's true rows sampled
+                    # by this statistic at this capacity level. << 1 => a single
+                    # ANALYZE may not see the driving combo -> high-variance /
+                    # unreliable q-error (v1 Sec.8 fidelity; query.184).
+                    "lambda_expected": _lambda_expected(
+                        backend, cand.table, int(level), query.ground_truth),
                     "level": level,
                 }
             mes.candidates[f"{cand.table_unqualified}({','.join(cand.columns)})"] = cm
@@ -174,3 +182,27 @@ def _mean(xs: list[float]) -> float:
 
 def _mean_int(xs: list[int]) -> int:
     return int(round(sum(xs) / len(xs))) if xs else 0
+
+
+def _stdev(xs: list[float]) -> Optional[float]:
+    if len(xs) < 2:
+        return None
+    m = _mean(xs)
+    return float((sum((x - m) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5)
+
+
+def _max(xs: list[float]) -> Optional[float]:
+    return float(max(xs)) if xs else None
+
+
+def _lambda_expected(backend, table: str, level: int, ground_truth) -> Optional[float]:
+    """v1 'lambda': expected # of the query's true rows in a statistic's sample.
+
+    ``lambda = (sample_rows / N) * truth = truth * sample_rows / num_rows``.
+    Backends that cannot report sampling return None.
+    """
+    sample = backend.sample_rows_per_level(table, level)
+    n = backend.num_rows(table)
+    if sample is None or n is None or n <= 0 or ground_truth is None:
+        return None
+    return float(ground_truth * (sample / n))
