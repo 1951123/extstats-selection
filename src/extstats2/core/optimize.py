@@ -42,6 +42,26 @@ from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
 
+# Optimizer classes (see docs/architecture.md §1.9).  The class is chosen by
+# the backend's *decisive* structural dimensions; the objective is an instance
+# parameter within the class.
+class OptimizerClass:
+    """Enum-like constants for the two MILP classes."""
+    # Sparse-linear MILP: per-query at most one statistic, objective exactly
+    # linear (uses Option.linear_improvement). Requires sparse_one_stat.
+    SPARSE_LINEAR = "sparse_linear"
+    # General multiplicative MILP: log-space additive approximation with
+    # overlap-free pruning (uses Option.log_improvement). Fallback when sparsity
+    # is not supported.
+    MULTIPLICATIVE = "multiplicative"
+
+
+# Objective aggregation inside a chosen class (instance parameter).
+OBJECTIVE_MEAN = "mean"
+OBJECTIVE_GEOMEAN = "geomean"
+OBJECTIVE_WORST = "worst"
+
+
 @dataclass(frozen=True)
 class Option:
     """One (candidate, capacity) selection available to a query."""
@@ -53,8 +73,17 @@ class Option:
     cand: str = ""
 
     def log_improvement(self, qbase: float) -> float:
-        """w = log(e_is / e_i^0), <= 0 when the stat helps."""
+        """w = log(e_is / e_i^0), <= 0 when the stat helps (multiplicative class)."""
         return float(np.log(max(self.qerror, 1e-12) / max(qbase, 1e-12)))
+
+    def linear_improvement(self, qbase: float) -> float:
+        """Δ_is = e_i^0 - e_is >= 0 (sparse-linear class).
+
+        Under the sparse (per-query-1) model the objective becomes exactly
+        linear: e_i = e_i^0 - Σ_s Δ_is x_is, so minimising Σ_i e_i is equivalent
+        to maximising Σ_{i,s} Δ_is x_is (i.e. minimising -Δ).
+        """
+        return float(max(qbase, 1e-12) - max(self.qerror, 1e-12))
 
 
 @dataclass(frozen=True)
@@ -175,6 +204,26 @@ def _overlap_pairs(query_options: list[Option], phys_stats: list[PhysicalStat]):
                 yield a, b
 
 
+def select_optimizer_class(props, objective: str = OBJECTIVE_MEAN) -> str:
+    """Soft-select the optimizer *class* from a backend's structural contract (§1.9).
+
+    The class is chosen by the *decisive* dimensions only:
+      - sparse_one_stat -> SPARSE_LINEAR (exactly-linear objective)
+      - else            -> MULTIPLICATIVE (log-space additive approximation)
+
+    The requested ``objective`` (mean/geomean/worst/p90) is an *instance*
+    parameter: it must be in ``props.supports_objectives``, but it does not
+    change the class. Raises ``ValueError`` when the objective is unsupported
+    (a hard error, so we never silently solve with a mistrusted objective).
+    """
+    if objective not in (props.supports_objectives or ()):
+        raise ValueError(
+            f"objective={objective!r} not in backend supports_objectives "
+            f"{props.supports_objectives}"
+        )
+    return OptimizerClass.SPARSE_LINEAR if props.sparse_one_stat else OptimizerClass.MULTIPLICATIVE
+
+
 def solve_ilp(
     phys_stats: list[PhysicalStat],
     queries_options: list[list[Option]],
@@ -183,6 +232,8 @@ def solve_ilp(
     maint_budget: Optional[float] = None,
     per_query_cap: Optional[int] = None,
     global_disjoint: bool = False,
+    optimizer_class: str = OptimizerClass.MULTIPLICATIVE,
+    objective: str = OBJECTIVE_MEAN,
 ) -> ILPResult:
     """Solve the multi-select shared-resource ILP with scipy.optimize.milp.
 
@@ -191,18 +242,32 @@ def solve_ilp(
     (additive approximation — see §1.7 [O1] / docs). When ``None`` (or ``<= 0``),
     no maintenance constraint is added and ``maint_cost`` is ignored, so existing
     call sites behave exactly as before.
+
+    ``optimizer_class`` selects the MILP class (§1.9):
+      - ``OptimizerClass.MULTIPLICATIVE`` (default): log-space additive objective
+        via :meth:`Option.log_improvement` (the general fallback class).
+      - ``OptimizerClass.SPARSE_LINEAR``: exactly-linear objective via
+        :meth:`Option.linear_improvement` (requires ``per_query_cap`` semantic).
+    ``objective`` is an instance parameter (mean/geomean/worst); for the mean the
+    above objectives apply directly.  Defaults preserve backward compatibility.
     """
     n_stats = len(phys_stats)
     n_opt = sum(len(opts) for opts in queries_options)
     n_var = n_stats + n_opt
     m = len(qerror_base)
 
+    def _improve(o: Option, qbase: float) -> float:
+        if optimizer_class == OptimizerClass.SPARSE_LINEAR:
+            # minimise -Δ_is (equivalently maximise total improvement ΣΔ_is x_is).
+            return -o.linear_improvement(qbase)
+        return o.log_improvement(qbase)
+
     c = np.zeros(n_var)
     gi = 0
     for q_idx, opts in enumerate(queries_options):
         qbase = qerror_base[q_idx]
         for o in opts:
-            c[n_stats + gi] = o.log_improvement(qbase)
+            c[n_stats + gi] = _improve(o, qbase)
             gi += 1
     integrality = np.ones(n_var)
 
@@ -314,13 +379,23 @@ def solve_ilp(
     gi = 0
     for q_idx, opts in enumerate(queries_options):
         qbase = qerror_base[q_idx]
-        log_t = np.log(max(qbase, 1e-12))
         sel_keys: list[str] = []
-        for j, o in enumerate(opts):
-            if x[n_stats + gi + j] > 0.5:
-                log_t += o.log_improvement(qbase)
-                sel_keys.append(phys_stats[o.stat_index].key)
-        qerr_per_query.append(float(np.exp(log_t)))
+        if optimizer_class == OptimizerClass.SPARSE_LINEAR:
+            # exactly-linear decode: e_i = e_i^0 - sum_s Δ_is x_is
+            q = max(qbase, 1e-12)
+            for j, o in enumerate(opts):
+                if x[n_stats + gi + j] > 0.5:
+                    q -= o.linear_improvement(qbase)
+                    sel_keys.append(phys_stats[o.stat_index].key)
+            qerr_per_query.append(float(max(q, 1.0)))
+        else:
+            # multiplicative decode in log space
+            log_t = np.log(max(qbase, 1e-12))
+            for j, o in enumerate(opts):
+                if x[n_stats + gi + j] > 0.5:
+                    log_t += o.log_improvement(qbase)
+                    sel_keys.append(phys_stats[o.stat_index].key)
+            qerr_per_query.append(float(np.exp(log_t)))
         chosen.append(sel_keys)
         gi += len(opts)
 

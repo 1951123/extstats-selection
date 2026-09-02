@@ -10,7 +10,15 @@ for PostgreSQL's catalog-mask protocol, :class:`extstats2.backend.catalog.Catalo
   the universal Protocol-A (no catalog-mask).
 """
 
-from .base import Backend, Estimate, IsolationCtx, StatObject, qerror
+from .base import (
+    Backend,
+    Estimate,
+    IsolationCtx,
+    MaintStructure,
+    StatObject,
+    StructuralProps,
+    qerror,
+)
 from .capabilities import (
     CANONICAL_CAPABILITIES,
     CAPACITY_NONE,
@@ -24,6 +32,8 @@ __all__ = [
     "Estimate",
     "IsolationCtx",
     "StatObject",
+    "StructuralProps",
+    "MaintStructure",
     "qerror",
     "Capability",
     "Capacity",

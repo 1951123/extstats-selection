@@ -95,6 +95,60 @@ class IsolationCtx(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Structural-properties contract (see docs/architecture.md §1.9)
+# ---------------------------------------------------------------------------
+
+# Maintenance-cost structure of the backend's statistics refresh.
+class MaintStructure:
+    """Enum-like constants for :attr:`StructuralProps.maint_structure`.
+
+    - ``FIXED_VAR``: refresh cost = fixed sampling base + additive per-statistic
+      update term (PostgreSQL's ANALYZE).
+    - ``FIXED_ONLY``: refresh cost is dominated by a fixed sampling term, and
+      per-statistic update cost is negligible (e.g. Oracle column groups sharing
+      one scan).
+    """
+    FIXED_VAR = "fixed+var"
+    FIXED_ONLY = "fixed_only"
+
+
+@dataclass(frozen=True)
+class StructuralProps:
+    """A backend's declaration of the structural properties of its estimation /
+    cost model.  The core uses this to select the optimizer *class* and to
+    instantiate its constraints / objective (soft selection — see §1.9).
+
+    Decisive dimensions (choose the optimizer class):
+      sparse_one_stat, disjoint_supported
+    Instance-parameter dimensions (fill the chosen class):
+      maint_structure, capacity_model, protocol_m (already on Backend)
+    """
+
+    # -- decisive dimensions ----------------------------------------------
+    # True when this backend can support "one statistic per query captures the
+    # dominant correlation", letting the objective be exactly linear (the
+    # sparse-linear MILP class).  When False, the core falls back to the general
+    # multiplicative MILP class.
+    sparse_one_stat: bool = True
+    # True when column-disjoint selection of statistics can be enforced so the
+    # joint effect on a query is independent (no planner interference), making
+    # the estimation model trustworthy.  Decides the pruning constraints applied.
+    disjoint_supported: bool = True
+
+    # -- instance-parameter dimensions -------------------------------------
+    # Maintenance cost structure (MaintStructure.*).  Determines how the
+    # maintenance budget constraint is instanced (per-statistic vs table-fixed).
+    maint_structure: str = MaintStructure.FIXED_VAR
+    # Capacity model: "per_stat" (e.g. PG statistics_target per object) or
+    # "per_scan" (e.g. Oracle estimate_percent per GATHER). Determines how the
+    # capacity ladder drives storage/maintenance costs.
+    capacity_model: str = "per_stat"
+    # Objective aggregations for which this backend can provide a *trustworthy*
+    # estimate.  Subset of {"mean","geomean","worst","p90"}.
+    supports_objectives: tuple[str, ...] = ("mean",)
+
+
+# ---------------------------------------------------------------------------
 # The backend interface
 # ---------------------------------------------------------------------------
 
@@ -114,6 +168,18 @@ class Backend(ABC):
         Unsupported canonical capabilities are included with ``supported=False``
         so the core can still list them but must not create them.
         """
+
+    def structural_props(self) -> StructuralProps:
+        """Declare the backend's structural-properties contract (§1.9).
+
+        The core uses this for *soft selection* of the optimizer class (see
+        :func:`extstats2.core.optimize.select_optimizer_class`): the decisive
+        dimensions pick between the sparse-linear MILP and the general
+        multiplicative MILP, and the instance params fill the chosen class.
+        Backends that do not override this declare a permissive default
+        (sparse + disjoint + fixed+var + mean), which is what PostgreSQL offers.
+        """
+        return StructuralProps()
 
     def has_protocol_m(self) -> bool:
         """Whether this backend supports catalog-mask (Protocol-M) acceleration.

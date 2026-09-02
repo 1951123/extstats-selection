@@ -103,6 +103,7 @@ class Config:
     bench: str = "census"
     budget_bytes: int = 0              # storage budget; 0 = unlimited
     maint_budget: Optional[float] = None  # maintenance budget; None/0 = unconstrained
+    objective: str = "mean"            # objective aggregation (mean|geomean|worst|p90)
     capacities: tuple[int, ...] = (0, 1, 2)   # abstract level indices to probe
     protocol: Optional[str] = None     # None -> backend decides (a/m)
     db: DBConfig = field(default_factory=DBConfig.from_env)

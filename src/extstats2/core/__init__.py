@@ -7,7 +7,18 @@ v1 was already generic (``optimize.py`` is an unchanged port).
 
 from .candidates import CandidateSet, generate_candidates, generate_candidates_per_query
 from .measure import measure_query
-from .optimize import ILPResult, Option, PhysicalStat, build_problem, solve_ilp
+from .optimize import (
+    OBJECTIVE_GEOMEAN,
+    OBJECTIVE_MEAN,
+    OBJECTIVE_WORST,
+    ILPResult,
+    OptimizerClass,
+    Option,
+    PhysicalStat,
+    build_problem,
+    select_optimizer_class,
+    solve_ilp,
+)
 from .predicates import predicate_columns
 from .queries import BenchQuery
 
@@ -19,8 +30,13 @@ __all__ = [
     "ILPResult",
     "Option",
     "PhysicalStat",
+    "OptimizerClass",
+    "OBJECTIVE_MEAN",
+    "OBJECTIVE_GEOMEAN",
+    "OBJECTIVE_WORST",
     "build_problem",
     "solve_ilp",
+    "select_optimizer_class",
     "predicate_columns",
     "BenchQuery",
 ]

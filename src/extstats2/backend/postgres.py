@@ -16,7 +16,7 @@ fills in the SQL / catalog code here (never in ``core/``).
 
 from __future__ import annotations
 
-from ..backend.base import Backend, Estimate, IsolationCtx, StatObject
+from .base import Backend, Estimate, IsolationCtx, MaintStructure, StatObject, StructuralProps
 from ..backend.capabilities import Capability, Capacity
 from ..core.queries import BenchQuery
 
@@ -38,6 +38,19 @@ class PostgresBackend(Backend):
 
     def supported_capabilities(self) -> list[Capability]:
         return list(_CAPABILITIES)
+
+    def structural_props(self) -> StructuralProps:
+        # PostgreSQL supports the sparse-linear class and column-disjoint pruning
+        # (verified in v1: one-stat sufficiency + global_disjoint predicts 1.000),
+        # ANALYZE cost is a fixed sample base + additive per-stat update, capacity
+        # is per-statistic (statistics_target). Objective: mean (extend later).
+        return StructuralProps(
+            sparse_one_stat=True,
+            disjoint_supported=True,
+            maint_structure=MaintStructure.FIXED_VAR,
+            capacity_model="per_stat",
+            supports_objectives=("mean",),
+        )
 
     def has_protocol_m(self) -> bool:
         # PG supports catalog-mask acceleration (Protocol-M). The mask driver is

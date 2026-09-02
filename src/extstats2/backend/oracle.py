@@ -21,7 +21,7 @@ implementation is M3.
 
 from __future__ import annotations
 
-from ..backend.base import Backend, Estimate, IsolationCtx, StatObject
+from .base import Backend, Estimate, IsolationCtx, MaintStructure, StatObject, StructuralProps
 from ..backend.capabilities import Capability, Capacity
 from ..core.queries import BenchQuery
 
@@ -44,6 +44,21 @@ class OracleBackend(Backend):
 
     def supported_capabilities(self) -> list[Capability]:
         return list(_CAPABILITIES)
+
+    def structural_props(self) -> StructuralProps:
+        # Oracle column-group statistics share a single GATHER scan, so the
+        # maintenance cost is dominated by a fixed sampling term (FIXED_ONLY) and
+        # capacity is per-scan (estimate_percent), not per-statistic. Sparsity and
+        # disjointness are *expected* to hold (data-driven) but are marked for
+        # verification in M3/M4; conservative defaults kept permissive so the
+        # sparse-linear class is reachable, pending end-to-end validation.
+        return StructuralProps(
+            sparse_one_stat=True,
+            disjoint_supported=True,
+            maint_structure=MaintStructure.FIXED_ONLY,
+            capacity_model="per_scan",
+            supports_objectives=("mean",),
+        )
 
     def has_protocol_m(self) -> bool:
         return False

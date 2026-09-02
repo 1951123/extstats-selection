@@ -165,10 +165,20 @@ $$
 
 ### 1.9 待决矛盾：估计模型与优化模型的跨后端一致性
 
-> **状态：立场已拍板（软选择乙+甲 + 目标结构立场 B），契约设计进行中。** 本节记录
-> v2 的一个 **核心架构矛盾**及其消解路径。它直接决定 `core/optimize.py` 是"单一
-> 共享 MILP"还是需抽象成"可挑选优化器"，以及 backend 接口是否需为此增加
+> **状态：立场已拍板（软选择乙+甲 + 目标结构立场 B），接口已落地 `f4b9e2c`。** 本节
+> 记录 v2 的一个 **核心架构矛盾**及其消解路径。它直接决定 `core/optimize.py` 是
+> "单一共享 MILP"还是需抽象成"可挑选优化器"，以及 backend 接口是否需为此增加
 > "结构性质契约"。
+>
+> **已落地的代码映射（2026-09-02）：**
+> - `backend/base.py`：`StructuralProps` 数据类（决定性维度 `sparse_one_stat` /
+>   `disjoint_supported`；实例维度 `maint_structure` / `capacity_model` /
+>   `supports_objectives`）+ `Backend.structural_props()` 契约方法。
+> - `core/optimize.py`：`OptimizerClass`（`SPARSE_LINEAR` / `MULTIPLICATIVE`）、
+>   `select_optimizer_class(props, objective)` 软选择 + `solve_ilp(optimizer_class,
+>   objective)`；PG 默认 `sparse_linear`（`per_query_cap` 语义下线性精确解码），
+>   默认 `multiplicative` 向后兼容。
+> - 不支持的 objective → `select_optimizer_class` 抛 `ValueError`（不静默用错模型）。
 
 **矛盾。** 方法论 §1.4-1.5 的核心是：query-level → workload-level 的**估计模型**
 必须具备某些结构性质（独立性、稀疏性），高效优化算法才存在。但若不同 DBMS 的

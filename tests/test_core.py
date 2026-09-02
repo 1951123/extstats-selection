@@ -12,9 +12,12 @@ import pytest
 
 from extstats2.config import get_backend
 from extstats2.core.optimize import (
+    OBJECTIVE_MEAN,
+    OptimizerClass,
     Option,
     PhysicalStat,
     build_problem,
+    select_optimizer_class,
     solve_ilp,
 )
 from extstats2.core.queries import BenchQuery
@@ -236,3 +239,73 @@ def test_capacity_contract():
     assert set(capacity_ladder("postgres")) == {0, 1, 2}
     assert capacity_ladder("postgres")[1]["statistics_target"] == 1000
     assert capacity_ladder("oracle")[2]["estimate_percent"] == 100
+
+
+# ---------------------------------------------------------------------------
+# optimizer-class selection + structural contract (§1.9)
+# ---------------------------------------------------------------------------
+
+def test_select_optimizer_class_sparse_vs_multiplicative():
+    from extstats2.backend.base import StructuralProps
+    assert select_optimizer_class(
+        StructuralProps(sparse_one_stat=True)) == OptimizerClass.SPARSE_LINEAR
+    assert select_optimizer_class(
+        StructuralProps(sparse_one_stat=False)) == OptimizerClass.MULTIPLICATIVE
+
+
+def test_select_optimizer_class_objective_mismatch_errors():
+    from extstats2.backend.base import StructuralProps
+    props = StructuralProps(supports_objectives=("mean",))
+    with pytest.raises(ValueError):
+        select_optimizer_class(props, objective="worst")
+
+
+def test_sparse_linear_class_exact_decode():
+    # With per_query_cap=1 and SPARSE_LINEAR, decoding is exactly linear:
+    # e_i = qbase - Δ_is for the single chosen stat.
+    phys = [PhysicalStat(table="t", columns=("a", "b"), level=1, cost=100)]
+    base = 10.0
+    # qerr 2 -> Δ = 8, so exact q-error after selection = 2.0
+    opts = [Option(stat_index=0, qerror=2.0, level=1, query="q1", cand="t(a,b)")]
+    res = solve_ilp(
+        phys, [opts], [base], budget_bytes=1000,
+        optimizer_class=OptimizerClass.SPARSE_LINEAR, per_query_cap=1,
+    )
+    assert res.chosen == [["t|a,b|L1"]]
+    assert res.qerror_per_query[0] == pytest.approx(2.0, abs=1e-6)
+    assert res.mean_qerror == pytest.approx(2.0, abs=1e-6)
+
+
+def test_sparse_linear_prefers_larger_improvement():
+    # Under the sparse-linear class the solver picks the option with the larger
+    # absolute improvement (Δ), not necessarily the larger log improvement.
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=1, cost=100),
+        PhysicalStat(table="t", columns=("c", "d"), level=1, cost=100),
+    ]
+    base = 100.0
+    # opt0: qerr 50 (Δ=50); opt1: qerr 90 (Δ=10). Sparse-linear picks opt0.
+    opts = [
+        Option(stat_index=0, qerror=50.0, level=1, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=90.0, level=1, query="q1", cand="t(c,d)"),
+    ]
+    res = solve_ilp(
+        phys, [opts], [base], budget_bytes=1000,
+        optimizer_class=OptimizerClass.SPARSE_LINEAR, per_query_cap=1,
+    )
+    assert res.chosen == [["t|a,b|L1"]]
+    assert res.qerror_per_query[0] == pytest.approx(50.0, abs=1e-6)
+
+
+def test_backend_structural_props_declarations():
+    pg = get_backend("postgres").structural_props()
+    assert pg.sparse_one_stat is True
+    assert pg.disjoint_supported is True
+    assert pg.maint_structure == "fixed+var"
+    assert pg.capacity_model == "per_stat"
+    assert "mean" in pg.supports_objectives
+
+    ora = get_backend("oracle").structural_props()
+    assert ora.maint_structure == "fixed_only"   # column groups share one scan
+    assert ora.capacity_model == "per_scan"      # estimate_percent per GATHER
+    assert "mean" in ora.supports_objectives
