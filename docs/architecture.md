@@ -128,22 +128,25 @@ $$
 
 ### 1.7 三个开放点（后续设计需显式处理）
 
-- **[O1] 维护成本：部署后刷新成本，校准的分段线性+饱和模型（`6a71597`）。** 原始
+- **[O1] 维护成本：部署后刷新成本，Y-two-layer（表激活阶梯 + 每统计变动）。** 原始
   问题三个维度里，v1 的 MILP 只有 q-error（目标）与存储成本（约束）。v2 加入
-  **部署后刷新**维护成本：每个物理统计带 `maint_cost`，作为与存储并列的**硬预算
-  约束** $\sum_s m_s y_s \le M$（`backend.maintain_cost()` → `core/measure.py` →
-  `core/optimize.py` 的 `maint_budget`）。关键设计：
-  - **固定成本是 target 的"分段线性 + 全表饱和"函数，不是纯线性**。源码证实：
-    ANALYZE 采样 `~min(300·target, 表行数)` 行（`targrows`），故固定成本线性增长
-    到全表扫描饱和点（$t_{sat} \approx N/300$）后封顶。实测 Census `climate`
-    (2.46M 行) 校准：$w \approx 0.00256$ s/target，`t_sat ≈ 8194`；模型预测
-    100/1000/10000 档 (0.26/2.58/21.2s) 与实测 (0.25/2.59/20.55s) 一致。
-  - **变动成本（每统计）实测很小**：因 `targrows`=max(target) 使采样共享，扩展统计
-    的边际刷新成本 (~0.02s/stat @t1000) 相对固定扫描可忽略。
-  - **非线性只影响单个 `m_s` 的估算，不影响优化求解**：capacity 是离散档，每个
-    (candidate, level) 的 `maint_cost` 仍是常数，进 ILP 是线性约束。
-  - **语义区分**：`maint_cost` 是部署后一次刷新的代价（进 ILP）；测量阶段实验成本
-    **不入模型**。目标保持纯 q-error，维护成本仅作硬约束。
+  **部署后刷新**维护成本。要点：
+  - **模型是"表激活 + 每统计"两层，不是"每统计重复计表固定"。** 物理上因
+    `targrows`=max(target) 使一次 ANALYZE 采样共享，同一张表选 K 个统计也只付
+    一次固定扫描。初版错误地把整表固定成本乘到每个选中统计重复相加；已修正为：
+    `maint(S) = Σ_{表t} base(t, max level on t) [每表一次, 按最高档] + Σ_{s∈S} var(s)`。
+  - **backend**: `table_maintain_tiers(table)`（每 target 档的固定 base；index=
+    达到的最高 level）+ `stat_maintain_var(obj)`（每统计变动态）。`measure.py` 的
+    `maint_cost` 现只承载 var。
+  - **optimize**: `MaintProfile.table_base_tiers` 注入后，求解器加表激活/档位
+    指示变量 $w_{t,\ell}$，维护预算 = 每激活表的阶梯固定 + 每统计 var（线性 MILP）。
+    不传 `MaintProfile` 时退化为 additive fallback（向后兼容）。
+  - **固定成本非线性（校准）**：ANALYZE 采样 `~min(300·t, 表行数)` 行 → 固定成本
+    分段线性增长到全表扫描饱和点 $t_{sat}\approx N/300$。实测 Census `climate`
+    校准 $w\approx0.00256$ s/target, `t_sat≈8194`；tiers [0.26,2.56,20.98] 复现
+    实测 [0.25,2.59,20.55]。
+  - **语义区分**：`maint_cost`/tiers 是部署后一次刷新代价（进 ILP）；测量阶段实验
+    成本**不入模型**。目标保持纯 q-error，维护成本仅作硬约束。
 - **[O2] planner 干扰是有条件成立的独立性的反例。** 模型独立性靠剪枝（列不重叠
   + 稀疏）来保护；但真实规划器在"非稀疏、重叠统计共存"时可能违反它。设计应
   明确"模型可信区"的边界，并让剪枝约束与其对齐。
@@ -471,9 +474,12 @@ def measure_candidates(backend, query, cands, protocol=None):
 **MILP 模型不动**（v1 已验证 + v2 扩展）：目标 $\sum_i w_{is}x_{is}$，约束
 (1) 存储预算 $\sum_s c_s y_s \le C$，(2) 选择须已创建 $x_{is}\le y_s$，
 (3) 查询内重叠禁止 $x_{is_a}+x_{is_b}\le 1$，(4) 同组合 level 互斥，
-(5) 可选 global-disjoint，(6，v2 新增) **维护预算** $\sum_s m_s y_s \le M$
-（`maint_cost` 可加，`maint_budget=None` 时不施加，向后兼容）。全部用
-`scipy.optimize.milp`。
+(5) 可选 global-disjoint，(6，v2 新增，可选) **维护预算**：表激活阶梯 + 每统计
+变动成本。当传入 `MaintProfile`（`table_base_tiers` 每表各 target 档的固定成本
++ `PhysicalStat.maint_cost` 作每统计变动态）时，求解器加表激活/档位指示变量
+$w_{t,\ell}$，使**每被激活表只付一次固定 ANALYZE 成本**（按其选中统计最高档），
+加每统计变动态；不传 `MaintProfile` 时退化为 additive fallback（`maint_cost`
+可加，`maint_budget=None` 不施加，向后兼容）。全部用 `scipy.optimize.milp`。
 
 ---
 

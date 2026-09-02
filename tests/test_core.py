@@ -13,6 +13,8 @@ import pytest
 from extstats2.config import get_backend
 from extstats2.core.optimize import (
     OBJECTIVE_MEAN,
+    ILPResult,
+    MaintProfile,
     OptimizerClass,
     Option,
     PhysicalStat,
@@ -310,3 +312,80 @@ def test_backend_structural_props_declarations():
     assert ora.maint_structure == "fixed_only"   # column groups share one scan
     assert ora.capacity_model == "per_scan"      # estimate_percent per GATHER
     assert "mean" in ora.supports_objectives
+
+
+# ---------------------------------------------------------------------------
+# Y-two-layer maintenance profile (table-activated fixed + per-stat var)
+# ---------------------------------------------------------------------------
+
+def _mk_prof():
+    # one table with fixed ladder per tier (0,1,2); var paid per selected stat
+    return MaintProfile(table_base_tiers={"t": (1.0, 10.0, 100.0)})
+
+
+def test_y2_two_stats_same_table_pay_fixed_once():
+    # Two non-overlapping stats on the SAME table, both level 1.
+    # Fixed cost must be charged ONCE (at tier 1 = 10.0), not twice.
+    prof = _mk_prof()
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=1, cost=50,
+                     maint_cost=1.0),   # var
+        PhysicalStat(table="t", columns=("c", "d"), level=1, cost=50,
+                     maint_cost=1.0),   # var
+    ]
+    base = 10.0
+    opts = [
+        Option(stat_index=0, qerror=2.0, level=1, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=2.0, level=1, query="q1", cand="t(c,d)"),
+    ]
+    # The two non-overlapping stats can BOTH be chosen (per_query_cap=None),
+    # so total = fixed(10.0 once) + var(1+1) = 12.0, NOT 2*(10+1)=22.
+    res = solve_ilp(phys, [opts], [base], budget_bytes=200,
+                    maint_budget=100.0, maint_profile=prof)
+    assert len(res.selected_stats) == 2
+    assert res.total_maint == pytest.approx(12.0, abs=1e-6)
+    assert res.total_bytes == 100
+
+
+def test_y2_two_stats_different_tables_pay_two_fixed():
+    # Two stats on DIFFERENT tables each pay their own table fixed cost.
+    prof = MaintProfile(table_base_tiers={"t1": (1.0, 10.0, 100.0),
+                                          "t2": (1.0, 10.0, 100.0)})
+    phys = [
+        PhysicalStat(table="t1", columns=("a", "b"), level=1, cost=50,
+                     maint_cost=0.5),
+        PhysicalStat(table="t2", columns=("c", "d"), level=1, cost=50,
+                     maint_cost=0.5),
+    ]
+    base = 10.0
+    opts = [
+        Option(stat_index=0, qerror=2.0, level=1, query="q1", cand="t1(a,b)"),
+        Option(stat_index=1, qerror=2.0, level=1, query="q1", cand="t2(c,d)"),
+    ]
+    res = solve_ilp(phys, [opts], [base], budget_bytes=200,
+                    maint_budget=100.0, maint_profile=prof)
+    # each table pays fixed 10.0, plus var 0.5+0.5 => 21.0
+    assert res.total_maint == pytest.approx(21.0, abs=1e-6)
+
+
+def test_y2_budget_binds_on_fixed_charge():
+    # A budget low enough to allow only one table's fixed charge.
+    prof = _mk_prof()
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=1, cost=50, maint_cost=0.1),
+        PhysicalStat(table="t", columns=("c", "d"), level=1, cost=50, maint_cost=0.1),
+        PhysicalStat(table="t", columns=("e", "f"), level=1, cost=50, maint_cost=0.1),
+    ]
+    base = 10.0
+    opts = [
+        Option(stat_index=0, qerror=2.0, level=1, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=2.0, level=1, query="q1", cand="t(c,d)"),
+        Option(stat_index=2, qerror=2.0, level=1, query="q1", cand="t(e,f)"),
+    ]
+    # Allow ~2 var terms + 1 fixed: budget 10.5 -> can take several stats but
+    # must stay within one table's fixed(10)+var; verify feasibility bound.
+    res = solve_ilp(phys, [opts], [base], budget_bytes=300,
+                    maint_budget=12.0, maint_profile=prof)
+    # All three cheap stats selected => fixed 10 once + var 3*0.1 = 10.3 <= 12
+    assert len(res.selected_stats) == 3
+    assert res.total_maint == pytest.approx(10.3, abs=1e-6)

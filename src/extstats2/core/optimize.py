@@ -122,6 +122,36 @@ class ILPResult:
     message: str
 
 
+@dataclass(frozen=True)
+class MaintProfile:
+    """Deployed-refresh maintenance-cost profile (Y-two-layer model).
+
+    ``table_base_tiers`` maps a table to its *fixed* one-refresh ANALYZE cost
+    ladder, indexed by the highest target level selected on that table:
+      ``base_tiers[table] = (base_0, base_1, base_2)``
+    where ``base_k`` is the fixed cost when the max selected level is `k`
+    (targrows = max target ⇒ one shared sampling scan per activated table).
+
+    Per-statistic *variable* cost is carried on each ``PhysicalStat.maint_cost``
+    (now meaning the marginal payload-update term only).
+
+    The total deployed maintenance of a selected set ``S`` is
+      ``sum_t base_tiers[t][max_{s∈S∩t} level_s] + sum_{s∈S} var_s``
+    which the solver enforces as a linear staircase charge per activated table
+    plus a linear per-statistic term.
+    """
+
+    # table (qualified) -> fixed cost ladder per reached max-level.
+    table_base_tiers: dict[str, tuple[float, ...]] = field(default_factory=dict)
+
+    def tables(self) -> list[str]:
+        return list(self.table_base_tiers)
+
+    def max_tier(self, table: str) -> int:
+        """Highest index in the fixed ladder for ``table`` (0 if absent)."""
+        return max(0, len(self.table_base_tiers.get(table, ())) - 1)
+
+
 def build_problem(
     phase1: dict,
     *,
@@ -230,6 +260,7 @@ def solve_ilp(
     qerror_base: list[float],
     budget_bytes: int,
     maint_budget: Optional[float] = None,
+    maint_profile: Optional[MaintProfile] = None,
     per_query_cap: Optional[int] = None,
     global_disjoint: bool = False,
     optimizer_class: str = OptimizerClass.MULTIPLICATIVE,
@@ -237,11 +268,16 @@ def solve_ilp(
 ) -> ILPResult:
     """Solve the multi-select shared-resource ILP with scipy.optimize.milp.
 
-    ``maint_budget`` (optional): a hard budget on the total *maintenance cost*
-    of the selected statistics, ``sum_s maint_cost(s) * y_s <= maint_budget``
-    (additive approximation — see §1.7 [O1] / docs). When ``None`` (or ``<= 0``),
-    no maintenance constraint is added and ``maint_cost`` is ignored, so existing
-    call sites behave exactly as before.
+    Maintenance-cost modelling (optional Y-two-layer model, §1.7 / docs):
+      - If ``maint_profile`` is provided, the solver enforces a *table-activated*
+        staircase cost: each activated table pays its fixed ANALYZE base once,
+        at the tier of the highest target level selected on it, plus a linear
+        per-statistic variable term (``PhysicalStat.maint_cost`` = var onward).
+        ``maint_budget`` then caps total_maint under this model.
+      - If ``maint_profile`` is None (default) and ``maint_budget`` is set, the
+        simpler additive approximation applies: ``sum_s maint_cost(s)*y_s <= M``,
+        matching prior behaviour and preserving backward compatibility.
+      - If neither is set, no maintenance constraint is added.
 
     ``optimizer_class`` selects the MILP class (§1.9):
       - ``OptimizerClass.MULTIPLICATIVE`` (default): log-space additive objective
@@ -253,14 +289,42 @@ def solve_ilp(
     """
     n_stats = len(phys_stats)
     n_opt = sum(len(opts) for opts in queries_options)
-    n_var = n_stats + n_opt
-    m = len(qerror_base)
 
     def _improve(o: Option, qbase: float) -> float:
         if optimizer_class == OptimizerClass.SPARSE_LINEAR:
             # minimise -Δ_is (equivalently maximise total improvement ΣΔ_is x_is).
             return -o.linear_improvement(qbase)
         return o.log_improvement(qbase)
+
+    # -- maintenance (Y-two-layer) indicator planning ----------------------
+    # When `maint_profile` is given, we add, per candidate table and per
+    # achieved level threshold L>=1, an indicator `w_{t,L}` = table t has a
+    # selected statistic whose level >= L.  `w_{t,0}` marks table activation.
+    # Staircase fixed cost is charged as base0*w_{t,0} + Σ_{L>=1} Δ_L*w_{t,L}.
+    use_profile = maint_profile is not None and bool(maint_profile.table_base_tiers)
+
+    # per-table set of levels among candidate physical statistics
+    table_levels: dict[str, set[int]] = {}
+    if use_profile:
+        for ps in phys_stats:
+            if ps.table in maint_profile.table_base_tiers:  # type: ignore[union-attr]
+                table_levels.setdefault(ps.table, set()).add(ps.level)
+    # maintenance indicator columns appended after x-variables
+    main_cols: dict[tuple[str, int], int] = {}   # (table, threshold L>=1) -> col
+    main_row0: dict[str, int] = {}               # (table) activation col (L=0)
+    n_main = 0
+    if use_profile:
+        for t, lvls in table_levels.items():
+            # activation indicator for table t
+            main_row0[t] = n_stats + n_opt + n_main
+            n_main += 1
+            max_l = max(lvls) if lvls else 0
+            for L in range(1, max_l + 1):
+                if L - 1 < len(maint_profile.table_base_tiers[t]):  # type: ignore[union-attr]
+                    main_cols[(t, L)] = n_stats + n_opt + n_main
+                    n_main += 1
+    n_var = n_stats + n_opt + n_main
+    m = len(qerror_base)
 
     c = np.zeros(n_var)
     gi = 0
@@ -292,10 +356,24 @@ def solve_ilp(
             if colset[a] & colset[b]
         )
         n_extra += n_disjoint
-    # optional maintenance budget adds one constraint row
-    has_maint = maint_budget is not None and maint_budget > 0
-    if has_maint:
-        n_extra += 1
+    # maintenance enrollment: profile (Y-two-layer) or additive fallback
+    has_maint_budget = use_profile or (maint_budget is not None and maint_budget > 0)
+    n_ind_trig = 0
+    if has_maint_budget:
+        if use_profile:
+            # per-y trigger rows: activation (y<=w_t0) + each L<=level_s with base
+            for ps in phys_stats:
+                t = ps.table
+                if t in main_row0:
+                    n_ind_trig += 1
+                    towers = maint_profile.table_base_tiers[t]
+                    for L in range(1, ps.level + 1):
+                        if L - 1 < len(towers) and (t, L) in main_cols:
+                            n_ind_trig += 1
+            # plus one total-budget row
+            n_extra += n_ind_trig + 1
+        else:
+            n_extra += 1
     n_con = 1 + n_opt + n_extra
 
     A = lil_matrix((n_con, n_var))
@@ -308,8 +386,43 @@ def solve_ilp(
     ub[nrow] = budget_bytes
     nrow += 1
 
-    # 1b) maintenance budget (optional, additive): sum_s maint_s * y_s <= M
-    if has_maint:
+    # 1b) maintenance constraint ------------------------------------------
+    if has_maint_budget and use_profile:
+        # -- indicator-trigger rows: y_s activates its table's thresholds --
+        for s_idx, ps in enumerate(phys_stats):
+            t = ps.table
+            if t not in main_row0:
+                continue
+            col_y = s_idx
+            # y_s <= w_{t,0}
+            A[nrow, col_y] = 1.0
+            A[nrow, main_row0[t]] = -1.0
+            ub[nrow] = 0.0
+            nrow += 1
+            towers = maint_profile.table_base_tiers[t]
+            for L in range(1, ps.level + 1):
+                if L - 1 < len(towers) and (t, L) in main_cols:
+                    A[nrow, col_y] = 1.0
+                    A[nrow, main_cols[(t, L)]] = -1.0
+                    ub[nrow] = 0.0
+                    nrow += 1
+        # -- total budget row: Σ_t(charge_t) + Σ_s var_s * y_s <= M --
+        for t, base in maint_profile.table_base_tiers.items():
+            if t not in main_row0:
+                continue  # no candidate stats on this table in this problem
+            # charge = base[0]*w0 + Σ_{L>=1} (base[L]-base[L-1]) * w_{t,L}
+            b0 = base[0] if len(base) > 0 else 0.0
+            A[nrow, main_row0[t]] = b0
+            for L, col in main_cols.items():
+                tL, th = L
+                if tL == t and th - 1 < len(base):
+                    A[nrow, col] += (base[th] - base[th - 1])
+        for s_idx, ps in enumerate(phys_stats):
+            A[nrow, s_idx] += ps.maint_cost  # var term
+        ub[nrow] = float(maint_budget)
+        nrow += 1
+    elif has_maint_budget:
+        # additive fallback: sum_s var_s * y_s <= M  (maint_cost == var)
         for s_idx, ps in enumerate(phys_stats):
             A[nrow, s_idx] = ps.maint_cost
         ub[nrow] = float(maint_budget)
@@ -372,7 +485,30 @@ def solve_ilp(
     x = res.x
     selected = [phys_stats[s_idx] for s_idx in range(n_stats) if x[s_idx] > 0.5]
     total_bytes = int(sum(ps.cost for ps in selected))
-    total_maint = float(sum(ps.maint_cost for ps in selected))
+
+    # Decode total maintenance. With the Y-two-layer profile, each activated
+    # table pays its staircase fixed charge once (at the max reached level),
+    # plus per-stat variable terms.
+    if use_profile:
+        total_maint = 0.0
+        # per-stat variable (maint_cost = var onward)
+        for s_idx, ps in enumerate(phys_stats):
+            if x[s_idx] > 0.5:
+                total_maint += ps.maint_cost
+        # table fixed charges from the indicator solution
+        for t, base in maint_profile.table_base_tiers.items():
+            if t not in main_row0:
+                continue
+            if x[main_row0[t]] > 0.5:
+                # charge at the highest reached threshold L
+                reached = 0
+                for (tt, L), col in main_cols.items():
+                    if tt == t and L - 1 < len(base) and x[col] > 0.5:
+                        reached = max(reached, L)
+                total_maint += base[min(reached, len(base) - 1)]
+        total_maint = float(total_maint)
+    else:
+        total_maint = float(sum(ps.maint_cost for ps in selected))
 
     qerr_per_query: list[float] = []
     chosen: list[list[str]] = []

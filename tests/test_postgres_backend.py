@@ -83,35 +83,31 @@ def test_create_size_drop_roundtrip(backend):
 
 
 @_NEED_PG
-def test_maintain_cost_positive_and_monotonic(backend):
-    mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
-    lo = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
-                    capacity=Capacity(0))
-    hi = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
-                    capacity=Capacity(2))
-    assert backend.maintain_cost(lo) > 0
-    assert backend.maintain_cost(hi) > backend.maintain_cost(lo)
+def test_table_maintain_tiers_monotonic(backend):
+    """Per-table fixed cost ladder must increase monotonically with tier."""
+    tiers = backend.table_maintain_tiers(".climate")
+    assert len(tiers) == 3  # ladder levels 0,1,2
+    assert all(tiers[i] < tiers[i + 1] for i in range(len(tiers) - 1))
+    assert backend.stat_maintain_var(
+        StatObject(table=".climate", columns=("a", "b"),
+                   capability=[c for c in backend.supported_capabilities()
+                               if c.name == "mcv"][0],
+                   capacity=Capacity(1))) > 0
 
 
 @_NEED_PG
-def test_maintain_cost_matches_measured_fixed_analyze(backend):
-    """The calibrated fixed cost should reproduce measured bare-ANALYZE
-    times (Census climate, warm) within tolerance."""
-    mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
-    measured = {100: 0.25, 1000: 2.59, 10000: 20.55}
-    for level, tgt in [(0, 100), (1, 1000), (2, 10000)]:
-        obj = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
-                         capacity=Capacity(level))
-        model = backend.maintain_cost(obj)
-        assert model == pytest.approx(measured[tgt], rel=0.35), (
-            f"target {tgt}: model {model:.2f} vs measured {measured[tgt]}"
+def test_table_maintain_tiers_match_measured_fixed_analyze(backend):
+    """The per-tier fixed base should reproduce measured bare-ANALYZE times
+    (Census climate, warm) within tolerance."""
+    tiers = backend.table_maintain_tiers(".climate")
+    # tiers indexed by level -> target 100/1000/10000
+    measured = {0: 0.25, 1: 2.59, 2: 20.55}
+    for lvl, tgt in measured.items():
+        assert tiers[lvl] == pytest.approx(tgt, rel=0.35), (
+            f"level {lvl}: model {tiers[lvl]:.2f} vs measured {tgt}"
         )
-    # Saturation evidence: at target 10000 the model must be well below the pure
-    # linear (no-cap) prediction w*t (=25.6s), reflecting the full-table-scan cap.
-    obj10k = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
-                        capacity=Capacity(2))
-    model10k = backend.maintain_cost(obj10k)
-    assert model10k < backend._W_PER_TARGET * 10000.0 * 0.95
+    # Saturation: highest tier << pure-linear w*t (=25.6s)
+    assert tiers[2] < backend._W_PER_TARGET * 10000.0 * 0.95
 
 
 @_NEED_PG

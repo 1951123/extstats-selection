@@ -319,29 +319,43 @@ class PostgresBackend(Backend):
         self._RELTUPLES_CACHE[base] = n
         return n
 
-    def maintain_cost(self, obj: StatObject) -> float:
-        """Estimate the deployed one-refresh ANALYZE cost of ``obj`` (seconds).
+    def _fixed_analyze(self, table: str, target: int) -> float:
+        """One-refresh *fixed* ANALYZE cost for ``table`` at ``target`` (seconds).
 
-        Piecewise-linear + saturation fixed cost, plus a small additive per-stat
-        variable term — calibrated on Census `climate` (§6.1):
+        Ramp then full-table-scan saturation, calibrated on Census `climate`:
+          fixed = w_per_target * min(target, reltuples/300)
+        This is paid ONCE per activated table (at its max selected target),
+        not per statistic.
+        """
+        n = max(self._reltuples(table), 1.0)
+        t_sat = n / 300.0            # sampling hits a full-table scan here
+        return float(self._W_PER_TARGET * min(target, t_sat))
 
-          fixed(t) = w_per_target * min(300*t, reltuples)     # ramp then full scan
-          var(obj) = var_per_stat_t1000 * (t/1000) * f(arity)
+    def table_maintain_tiers(self, table: str) -> tuple[float, ...]:
+        """Fixed cost per target tier (index = abstract level 0,1,2,...).
 
-        The ramp comes from sampling: ANALYZE scans ~min(300*target, N) sample
-        rows, so cost grows ~linearly with target until the table is fully
-        scanned. The variable term (recomputing each statistic's payload on the
-        shared sample) is small relative to the fixed scan.
+        ``base[k]`` = one-refresh ANALYZE fixed cost if the highest target level
+        selected on ``table`` is `k` (targrows = max target ⇒ sampling is shared
+        across all stats on the table).
+        """
+        n_levels = max(self._ladder) + 1 if self._ladder else 1
+        out = []
+        for lvl in range(n_levels):
+            if lvl not in self._ladder:
+                out.append(out[-1] if out else 0.0)
+                continue
+            tgt = self._ladder[lvl]
+            out.append(self._fixed_analyze(table, tgt))
+        return tuple(out)
+
+    def stat_maintain_var(self, obj: StatObject) -> float:
+        """Marginal per-statistic refresh cost (payload update), seconds.
+
+        Small relative to the shared fixed scan; scales with target and arity.
         """
         t = self._native_target(obj.capacity)
-        n = max(self._reltuples(obj.table), 1.0)
-        # Saturation target: sampling 300*t rows hits a full-table scan at t_sat.
-        t_sat = n / 300.0
-        # fixed: linear (w_per_target s per target-unit) up to t_sat, then flat
-        fixed = self._W_PER_TARGET * min(t, t_sat)
-        # variable: per-stat payload update, scales with target and arity
-        var = self._VAR_PER_STAT_T1000 * (t / 1000.0) * (1.0 + 0.1 * max(len(obj.columns) - 2, 0))
-        return float(fixed + var)
+        arity_f = 1.0 + 0.1 * max(len(obj.columns) - 2, 0)
+        return float(self._VAR_PER_STAT_T1000 * (t / 1000.0) * arity_f)
 
     @staticmethod
     def _q(name: str) -> str:

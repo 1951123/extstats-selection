@@ -130,15 +130,18 @@ def measure_query(
                         sizes.append(backend.stat_size_bytes(stat))
                         estimates.append(est.estimate)
                         qerrs.append(est.qerror if est.qerror is not None else float("nan"))
-                # Maintenance cost is a *deployed-refresh* cost, reported by the
-                # backend (distinct from the measurement-phase protocol cost,
-                # which is never part of the optimisation model).
+                # ``maint_cost`` here carries the per-statistic *variable* refresh
+                # term only.  The *fixed* table-level ANALYZE cost (shared per
+                # activated table, targrows=max(target)) is not charged here — it
+                # is supplied to the ILP as a MaintProfile (table_base_tiers) via
+                # backend.table_maintain_tiers, so a table with several selected
+                # statistics pays its fixed scan only once.
                 cm.levels[int(level)] = {
                     "estimate": estimates[0],
                     "qerror": _mean(qerrs),
                     "qerror_repeats": qerrs,
                     "size_bytes": _mean_int(sizes),
-                    "maint_cost": backend.maintain_cost(stat),
+                    "maint_cost": backend.stat_maintain_var(stat),
                     "level": level,
                 }
             mes.candidates[f"{cand.table_unqualified}({','.join(cand.columns)})"] = cm

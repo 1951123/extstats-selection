@@ -252,21 +252,30 @@ class Backend(ABC):
 
     # -- maintenance cost --------------------------------------------------
 
-    def maintain_cost(self, obj: StatObject) -> float:
-        """Estimated cost of *one refresh* of ``obj`` in deployed operation.
+    def table_maintain_tiers(self, table: str) -> tuple[float, ...]:
+        """Fixed ANALYZE/GATHER cost ladder for one deployed refresh of ``table``.
 
-        This is the statistic's *operational* refresh cost (e.g. the ANALYZE /
-        GATHER_TABLE_STATS time contributed by this statistic), used by the ILP
-        as a per-object maintenance cost ``m_s`` under an additive approximation.
+        Returns a tuple indexed by *target tier* (the abstract capacity level):
+        ``base[k]`` = one-refresh fixed cost when the highest target level
+        selected on ``table`` is `k`.  This is the *per-table* fixed cost shared
+        across all statistics on the table (the sampling scan is paid once per
+        ANALYZE, at the max target — targrows semantics).
 
-        It is deliberately distinct from the *measurement-phase* cost of running
-        the measurement protocol (created/analyzed/explained while measuring),
-        which never enters the optimisation model. Each backend may implement
-        this via a model estimate (e.g. derived from table size and capacity) or
-        a cached measurement.
-
-        The default returns ``0`` so backends that do not track maintenance cost
+        Default returns all zeros so backends that don't track maintenance cost
         degrade gracefully (the ILP then ignores the maintenance budget).
+        Backends should also implement :meth:`stat_maintain_var`.
+        """
+        return (0.0,)
+
+    def stat_maintain_var(self, obj: StatObject) -> float:
+        """Marginal per-statistic refresh cost of ``obj`` (payload update term).
+
+        This is the *variable* part: recomputing this statistic's payload on
+        the shared sample.  It is added per created statistic in the ILP, while
+        the fixed scan cost is charged once per activated table via
+        :meth:`table_maintain_tiers`.
+
+        Default returns ``0.0``.
         """
         return 0.0
 
