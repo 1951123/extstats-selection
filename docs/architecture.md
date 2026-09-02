@@ -511,6 +511,22 @@ AUTO at 100%`）；为此两后端都增加 `restore_natural_stats()`（PG 单�
 误差的查询（qerr 数百–数千）两引擎**完全相同**：query.184/465/62/61 等，均为
 **多列强相关、且 combo 命中极稀疏行（truth≈13–107）**的查询。
 
+这个对齐还**量化了"extended statistics 的价值边界"**（`cross_scale baseline`，
+与两引擎**逐条完全相同、Jaccard=1.0** 的高误差查询集合）：
+
+| base q-error ≥ | PG 条数 | Oracle 条数 | （两引擎集合一致） |
+| --- | --- | --- | --- |
+| 1 | 468 | 468 | 100%（整库 median≈1.28，多数本就够好） |
+| 2 | 104 | 104 | 100% |
+| 5 | 42 | 42 | 100% |
+| 10 | 27 | 27 | 100% |
+| 100 | 9 | 9 | 100% |
+| 1000 | 4 | 4 | 100% |
+
+即：468 条 census 里，只有 **22%（base≥2）~ 9%（base≥5）** 的查询单列统计没估准
+、真正需要 extstats；且"哪些查询需要"由数据决定、引擎无关。这界定了后续"该为哪
+些查询买列组/投预算"的靶子 —— 一个小的、引擎不变的尾部。
+
 **(c) 主导列组引擎无关（one-stat sufficiency 的跨引擎证据）。** 对这些最坏查询，两端
 各自独立枚举 2 列 mcv 列组并报告最优者（数值为复现脚本 `results/cross_focus.json`；
 两者皆用引擎全表采样建列组）：
@@ -529,9 +545,49 @@ sufficiency / MCV-core 收敛在跨后端意义上的实证支撑。（注：查
 主导列组行 qerr 略有差异，是两引擎采样与直方图像限差异；量级、主导列组与"非主导无效"的
 结论完全一致。）
 
-复现：`python -m extstats2.eval.cross_focus --out results/cross_focus.json`（从自然单列
-基线、全表采样建列组，输出 3 组对照）。更大范围基线对齐统计在 `results/` 的临时 ad-hoc
-脚本记录中。
+**(d) 规模化的 top-k 可修复性（PG，Protocol-A；`cross_scale topk`）。** 取自然基
+qerr>5 的 top-20 条（PG 枚举全部 2 列 mcv，`statistics_target=100`）：
+
+- **20 条里 10 条能被单一 2 列组修到 qerr≤5**（query.184 4098→4.1、query.62 2086→
+  2.8、query.221 115→1.3、query.335 21→1.2、query.104 20→1.5、query.403 27→1.7 …）。
+  这量化了 one-stat sufficiency 在更大样本上的胜率（高频：约一半强修正）。
+- 另外 10 条其最优 2 列组仍 >5（query.465 修到 41、query.61 修到 45、query.382 修到
+  15 …）—— 它们要么误差跨多个相关列对（需 ≥2 组）、要么在 2 列粒度下就修不动。
+- **Oracle 抽验这 3 条**强烈一致：query.184 (dom `(iDisabl1,iRspouse)` Ora 1.3)、
+  query.62 (`(iRspouse,iWork89)` Ora 2.5) 上 Oracle 复现了 PG 的量级；**query.465 是
+  反例**——PG 的 `(iDisabl1,iYearsch)` 把 PG 从 2369 修到 41，但该列组在 Oracle 上
+  几乎不动（仍 2363）。即：在更大样本上，**主导列组并非永远引擎间一致**；PG 独有的桶
+  语义会让某个列组只对 PG 有效。这是 (c) 小样本结论在规模化时的诚实边界，也是 M4/后续
+  要量化的"两引擎可修复集重叠度"，而非无条件的逐查询一致。
+
+复现：`cross_focus`（小样本 3 条，perfect agreement）+ `cross_scale topk`（PG top-20 +
+Oracle 抽验）。结果 JSON 落在 `results/`。
+
+**(e) 测量↔部署采样一致性的实证（[O-采样]）**。测量某 extstat 时的容量档，是否与部署
+时一致？在 PG 上对 query.62（truth=45，主导对 `(iRspouse,iWork89)`）做拆分实验，把
+"扩展统计自身的目标"与"整表 `default_statistics_target`（基础单列重扫档）"两个旋钮分开
+控制：
+
+| 实验 (ext `SET STATISTICS` / base `default_statistics_target`) | qerr |
+| --- | --- |
+| baseline（自然，base=100，无 ext） | 2089 |
+| A) ext 10000 / **base 100**（部署于自然 base） | 2.5 |
+| B) ext 10000 / base 10000（当前 v2 测量语义：把全局档也抬到候选档） | 2.5 |
+| C) ext 1000 / base 100 | 1.32 |
+| C′) ext 1000 / base 10000 | 2.5 |
+
+**结论，两条：**
+1. **抬 base 档（B≈A）对候选本身量级基本无偏**：v2 测量时顺带把 `default_statistics_target`
+   抬到候选档（保持全表 `targrows = max target` 的共享扫描假设）并不会改变候选的真实修
+   复幅度（A 与 B 都 =2.5）。因此"测量把 base 重扫到候选档"不是偏差来源。
+2. **真正的对照要锁在扩展统计自身的 `SET STATISTICS`（capacity level）**：ext-target
+   1000→qerr 1.32、10000→2.5（非单调：对极稀疏 45 行目标，过采样反而引入噪声）。所以
+   部署时必须**复现被选 stat 的 per-object target**（`ALTER STATISTICS ... SET STATISTICS`
+   = 测量时该 capacity 档），否则测量选出的档在部署时是另一档、效果不同。
+
+即：v2 的"capacity = 整表该档扫描 + 该对象 `SET STATISTICS` 同步设同值"在 PG 上自洽
+（表级共享扫描假设由 MaintProfile 的 Y-two-layer 承担）；不一致风险收敛到"部署要复现
+per-object target"，而非"要复现 base 档"。
 
 ---
 
