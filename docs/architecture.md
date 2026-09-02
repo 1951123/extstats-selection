@@ -453,21 +453,38 @@ def measure_candidates(backend, query, cands, protocol=None):
 - 连接：psycopg 惰性连接，autocommit；`default_statistics_target` 由
   `set_capacity`/`build_stats` 控制。
 
-### 6.2 Oracle (`backend/oracle.py`) — **尚未实现（M3）**
-- **统计对象**: 用 Oracle 的 **column group statistics**（12c+ 通过
-  `DBMS_STATS.GATHER_TABLE_STATS` 的 `METHOD_OPT -> FOR COLUMNS (a,b,c)`，
-  或用 `DBMS_STATS.CREATE_EXTENDED_STATS` 显式创建扩展统计）。每个列组产生一个
-  系统命名的隐藏列（如 `SYS_STU...`），可在 `USER_TAB_COL_STATISTICS` /
-  `ALL_STAT_EXTENSIONS` 查到。
-- **构建**: `DBMS_STATS.GATHER_TABLE_STATS(ownname, tabname, estimate_percent=..., method_opt=>'FOR COLUMNS (a,b) SIZE ...')`。
-- **估计**: `EXPLAIN PLAN FOR <sql>` + `DBMS_XPLAN.DISPLAY`，从计划中读
-  `Cardinality`（输出基数）字段。COUNT 查询需同样重写为 `SELECT *` 读取过滤后基数。
-- **目录**: `USER_STAT_EXTENSIONS` / `USER_TAB_COL_STATISTICS`（`NUM_DISTINCT`、`NUM_BUCKETS`）读取大小/容量。
-- **隔离协议**: Oracle 无 catalog-mask（不能 NULL 掉一列统计而不影响其它），故
-  `has_protocol_m() == False`，退化为 **Protocol-A**（建→`GATHER_TABLE_STATS`→`EXPLAIN PLAN`→删→重建）。
-- **能力映射**: 主要是 `mcv`(column group histogram) 与 `ndistinct`(group)；
-  `dependency` 标记为不支持（或以后用基于关联分析的自定义统计补充）。
-- 连接用 `python-oracledb`。
+### 6.2 Oracle (`backend/oracle.py`) — **已实现（M3）**
+- **统计对象**: Oracle 的 **column group statistics**（12c+，通过
+  `DBMS_STATS.GATHER_TABLE_STATS(..., METHOD_OPT => 'FOR COLUMNS (a,b) SIZE n')`
+  构建）。每个列组在 `USER_STAT_EXTENSIONS` 里记一条，内部是系统命名的隐藏列
+  （`SYS_STU...`），其直方图细节在 `USER_TAB_COL_STATISTICS`。扩展对象的身份是
+  **列集合**（`DROP_EXTENDED_STATS` 按列表达式 drop），不是可写对象名——backend 的
+  StatObject 因此按列集合识别、drop、list（与本层 Protocol-A 隔离的列集合匹配一致）。
+- **构建**: `GATHER_TABLE_STATS(ownname, tabname, estimate_percent=<cap>,
+  METHOD_OPT => 'FOR ALL COLUMNS SIZE 1 FOR COLUMNS (...) SIZE <buckets>')`。
+  一个表一次 GATHER 会在一趟采样里建好全部所需列组（**FIXED_ONLY / per_scan**）。
+  `mcv`(primary) 建列组+直方图（SIZE=buckets）；`ndistinct` 只建列组（SIZE=1）。
+- **估计**: 重写 `COUNT(*)`→`SELECT *`，`EXPLAIN PLAN SET STATEMENT_ID=<literal>` +
+  `plan_table` 读根节点 `Cardinality`，读后按 statement_id 清理。注意 STATEMENT_ID
+  必须是字符串字面量（bind 会 ORA-01780）；且 Oracle 不接受 `SELECT FROM`（缺表达式），
+  故本后端重写为 `SELECT *`。基准 SQL 是 **PG 方言**（`FROM t AS a` 别名、`::type`
+  强转），Oracle 原生不接受——estimate 前用 **sqlglot PG→Oracle 转译**（`AS` 别名去
+  掉、`::timestamp`→`CAST(... AS TIMESTAMP)`），使 stats_CEB 的 PG 方言查询也能在
+  Oracle 上 EXPLAIN。这是"基准 SQL 需要引擎可移植"这一跨后端一致性问题的一环。
+- **目录**: `USER_STAT_EXTENSIONS`（存在/列解析）+ `USER_TAB_COL_STATISTICS`
+  （隐藏列 `NUM_BUCKETS * AVG_COL_LEN` 作单调 size 代理；extension 是 CLOB，不能在
+  SQL 里 `=` 比较，改在 Python 侧匹配列集合）。
+- **隔离协议**: Oracle 无 catalog-mask（不能单独 NULL 掉一列），`has_protocol_m() ==
+  False`，走 **Protocol-A**（建/`GATHER`/测/删/重建成按列集合匹配的版本）。
+- **能力映射**: `mcv`(column group histogram, **primary**) 实证能修复 selection
+  基数 q-error：CLIMATE 上 (IAVAIL,ICLASS) 列组把 ~49k → ~989k（真值 ~990k）。
+  `ndistinct`(group) 支持；`dependency` 不支持。
+- **维护成本模型**: 列组共享一趟 GATHER 扫描 → `MaintStructure.FIXED_ONLY` +
+  容量模型 `per_scan`（estimate_percent 是每次整表扫描的采样抽屉）。`table_maintain_tiers`
+  按 CLIMATE(~2.46M) 标定：estimate 1%→0.54s、10%→2.10s、100%→21.7s（degree=1，按行数
+  缩放）；`stat_maintain_var` ≈ 常数（无额外按统计的扫描）。
+- 连接：python-oracledb thin，autocommit；owner = 当前 schema (SYSTEM)。基准表都以未加引
+  号、大写形式匹配（Oracle 折叠未引号标识符为大写）。
 
 ---
 
@@ -517,8 +534,10 @@ CLI 流程与 v1 一致：`generate → measure → optimize → verify`，但�
    `config.py`、README、本文档。`core/optimize.py` 从 v1 移植。
 2. **M2 — PG 后端**：移植 v1 全部 PostgreSQL 逻辑到 `backend/postgres.py`，
    通过一条 census 冒烟测量验证 `core` 跑通 PG 路径（含 Protocol-M）。
-3. **M3 — Oracle 后端**：实现 `backend/oracle.py`（column groups + Protocol-A），
-   验证同一 `core` 无改动跑 census 或 stats_CEB。
+3. **M3 — Oracle 后端（已完成）**：实现 `backend/oracle.py`（column groups +
+   Protocol-A，按列集合隔离），验证同一 `core` 无改动跑 census——`(iAvail,iClass)`
+   列组把 q-error 从 ~32.8 修到 ~1.6，并干净恢复（无残留统计）。Oracle 特有的
+   MCV 收敛与 FIXED_ONLY/per_scan 维护模型已在 §6.2 / §4 记录。
 4. **M4 — 交叉验证**: 同一份核心算法在 PG/Oracle 上对比结果，证明抽象层真正通用。
 
 ---

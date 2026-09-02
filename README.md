@@ -56,7 +56,10 @@ for the full design.
 - [x] M2 PostgreSQL backend: estimate, DDL (create/drop/build), size, list,
       Protocol-A isolate (exception-safe), backend-owned capacity ladder,
       fixed+var `maintain_cost`. Protocol-M catalog-mask is a later enhancement.
-- [ ] M3 Oracle backend (column groups + Protocol-A).
+- [x] M3 Oracle backend: column groups + Protocol-A (column-set isolate), mcv
+      capability validated to repair selection cardinality on Census CLIMATE;
+      FIXED_ONLY/per_scan maintenance model calibrated from measured GATHER
+      times.
 - [ ] M4 cross-backend validation (same core on PG & Oracle).
 
 ## Quick start
