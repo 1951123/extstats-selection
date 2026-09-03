@@ -43,8 +43,11 @@ from .queries import BenchQuery
 # ``attstattarget`` range; Oracle = an engine-faithful tiny grid, see
 # ``Backend.representation_param_tiers``). ``DEFAULT_PARAM_TIERS`` is kept only
 # as a PG-flavoured fallback; callers should pass ``param_tiers=None`` to use
-# the active backend's own grid.
-DEFAULT_PARAM_TIERS: tuple[int, ...] = (25, 50, 100, 1000, 10000)
+# the active backend's own grid. It is a DENSE general grid (see PG docstring):
+# measurement does not pre-trim from hindsight; each λ caps it via S/300 and the
+# optimizer dominance-prunes synonyms at solve time.
+DEFAULT_PARAM_TIERS: tuple[int, ...] = (5, 10, 25, 50, 100, 250, 500, 1000,
+                                        2500, 5000, 10000)
 
 #: Active experiment λ-tiers during the fast-measurement phase. L2 (full scan,
 #: ~22 s/gather on Oracle) is dropped for now to keep experiments fast; it can be
@@ -277,6 +280,7 @@ def measure_workload_lambda(
     workload: str = "default",
     outdir: Path,
     use_protocol_m: bool = False,
+    skip_existing: bool = True,
 ) -> None:
     """Measure a workload into ``<outdir>/per_lambda/<workload>/``.
 
@@ -288,6 +292,12 @@ def measure_workload_lambda(
     ``use_protocol_m`` is true and the backend can catalog-mask, per-query
     measurement uses :func:`measure_query_lambda_m` (one shared ANALYZE per λ)
     instead of per-candidate Protocol-A.
+
+    ``skip_existing`` (default True) makes the run **idempotent/incremental**:
+    a query whose ``<qid>.json`` already exists in the destination is skipped
+    (a file is written only *after* all requested λ levels complete, so presence
+    of the file means the query is fully measured). This lets an interrupted
+    full-workload run be resumed without re-measuring completed queries.
     """
     dest = result_dir(outdir, workload, backend.name())
     dest.mkdir(parents=True, exist_ok=True)
@@ -319,7 +329,18 @@ def measure_workload_lambda(
 
     measurer = measure_query_lambda_m if (
         use_protocol_m and backend.supports_catalog_mask()) else measure_query_lambda
+    done = skipped = 0
     for query in queries:
         cands = cands_by_q.get(query.qid, [])
+        out_file = dest / f"{query.qid}.json"
+        if skip_existing and out_file.exists():
+            skipped += 1
+            if skipped <= 25 or skipped % 50 == 0:
+                print(f"[skip] {query.qid} already measured (skipping)")
+            continue
         measurer(backend, query, cands, levels=levels,
                  param_tiers=param_tiers, outdir=dest)
+        done += 1
+        if done == 1 or done % 10 == 0:
+            print(f"[run] measured {done} new queries this invocation "
+                  f"(qid={query.qid})", flush=True)

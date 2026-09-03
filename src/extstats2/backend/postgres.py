@@ -671,11 +671,19 @@ class PostgresBackend(Backend):
         return float(min(300.0 * int(self._ladder[level]), n))
 
     def representation_param_tiers(self, table: str | None = None) -> tuple[int, ...]:
-        """PG represents ext-stat detail as a scalar ``attstattarget`` and gives
-        genuinely finer histograms up to large integer targets, so the grid keeps
-        the full PG-native range (each level is internally capped by the λ lattice
-        ``S/300`` in the driver when the object's param is actually built)."""
-        return (25, 50, 100, 1000, 10000)
+        """PG represents ext-stat detail as a scalar ``attstattarget``.
+
+        Returns a deliberately DENSE general grid. Rationale (2026-09-03,
+        architecture decision): the representation param at which a (colset, λ)
+        saturates is data-driven and not known *a priori*, so the measurement grid
+        is kept dense rather than pre-trimmed from hindsight (v1/offline analysis
+        must not be used to cut the measurement range — that would bake in a
+        post-hoc assumption). Each λ's lattice cap ``S/300`` automatically drops
+        params above the λ's admissible depth; the optimizer then dominance-prunes
+        plateau-synonymous / dominated params per (query, colset, λ) at solve time.
+        Coverage spans low-cardinality (census climate: saturates <= ~50-100) up to
+        high-cardinality (stats_CEB: needs 1000+), so the same grid serves both."""
+        return (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000)
 
     def max_param_at_level(self, table: str, level: int) -> Optional[float]:
         """Lattice cap ``S_level/300`` = the λ single-column handle (PG)."""
