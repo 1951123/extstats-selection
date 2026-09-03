@@ -24,7 +24,7 @@ from typing import Optional
 from ..backend.base import Backend, StatObject
 from ..backend.capabilities import Capacity
 from .candidates import CandidateSet
-from .measure_lambda_io import (LambdaTier, Meta, write_meta,
+from .measure_lambda_io import (LambdaTier, Meta, workload_dir, write_meta,
                                 write_query_measure)
 from .queries import BenchQuery
 
@@ -119,16 +119,21 @@ def measure_workload_lambda(
     *,
     levels: tuple[int, ...] = (0, 1, 2),
     param_tiers: tuple[int, ...] = (100, 1000, 10000),
+    workload: str = "default",
     outdir: Path,
-    bench: str = "",
 ) -> None:
-    """Measure a whole workload and write per-query files + a meta file."""
-    outdir = Path(outdir)
-    # meta describing the λ tiers actually realized (per a reference table row
-    # count is not universal; record the level→param mapping by backend params).
-    tiers = []
+    """Measure a workload into ``<outdir>/per_lambda/<workload>/``.
+
+    Writes ``_meta.json`` + one ``<qid>.json`` per query, namespaced by workload
+    so multiple workloads (census, stats_CEB, ...) never collide.
+    """
+    dest = workload_dir(outdir, workload)
+    dest.mkdir(parents=True, exist_ok=True)
+    # meta describing the λ tiers actually realized (per the first table's row
+    # count via a reference table; native params recorded by level).
+    tiers: list[LambdaTier] = []
     table = None
-    for qid, cl in cands_by_q.items():
+    for cl in cands_by_q.values():
         if cl:
             table = cl[0].table
             break
@@ -138,12 +143,12 @@ def measure_workload_lambda(
             rows = backend.lambda_sampling_rows(table, level)
             ep = None
         else:
-            single_tgt, rows, ep = None, None, None
+            single_tgt = rows = ep = None
         tiers.append(LambdaTier(level=level, S_rows=rows,
                                 single_target=single_tgt, estimate_percent=ep))
-    write_meta(outdir, Meta(bench=bench, backend=backend.name(), tiers=tiers))
+    write_meta(dest, Meta(bench=workload, backend=backend.name(), tiers=tiers))
 
     for query in queries:
         cands = cands_by_q.get(query.qid, [])
         measure_query_lambda(backend, query, cands, levels=levels,
-                             param_tiers=param_tiers, outdir=outdir)
+                             param_tiers=param_tiers, outdir=dest)

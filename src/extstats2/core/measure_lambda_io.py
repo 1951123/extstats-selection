@@ -11,11 +11,13 @@ Storage is **one JSON file per query** (decoupled production, incremental
 re-runs, parallel-safe), plus a single root ``_meta.json`` carrying the shared
 lambda-tier definitions (backend-agnostic level → S_rows/single_target).
 
-Output layout under a directory ``outdir``::
+Output layout under a results root ``outdir``::
 
     outdir/
-      _meta.json                 # workload/backend + lambda tier table
-      <qid>.json                 # one query's by_lambda block (+ actual)
+      per_lambda/
+        <workload>/             # one dir per workload (namespaced by workload name)
+          _meta.json            # workload/backend + lambda tier table
+          <qid>.json            # one query's by_lambda block (+ actual)
 """
 
 from __future__ import annotations
@@ -72,6 +74,20 @@ class Meta:
 # ---------------------------------------------------------------------------
 # I/O
 # ---------------------------------------------------------------------------
+
+def workload_dir(outdir: Path, workload: str) -> Path:
+    """Directory for one workload's per-λ results under ``outdir``.
+
+    Layout: ``outdir/per_lambda/<workload>/`` when ``outdir`` is the results root
+    (e.g. ``results``), or ``outdir/<workload>/`` when ``outdir`` already points at
+    ``results/per_lambda``. Either way it adds one ``<workload>`` layer so the
+    per-query files of different workloads never collide.
+    """
+    base = Path(outdir)
+    if base.name == "per_lambda":
+        return base / workload
+    return base / "per_lambda" / workload
+
 
 def write_meta(outdir: Path, meta: Meta) -> Path:
     outdir = Path(outdir)
