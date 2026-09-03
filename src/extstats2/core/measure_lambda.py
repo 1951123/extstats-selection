@@ -29,6 +29,17 @@ from .measure_lambda_io import (LambdaTier, Meta, workload_dir, write_meta,
 from .queries import BenchQuery
 
 
+# Lambda tiers (scan-depth levels) and ext-stat representation-param tiers are
+# TWO INDEPENDENT axes, joined only by the lattice cap ``p <= S_lambda/300``.
+# Lambda levels come from the backend ladder (= target -> S); the param grid is a
+# separate set of representation values the OR optimizes per (colset, lambda).
+# A low representation param (e.g. 25/50: v1 found ext representation matters at
+# low detail) is offered at ANY lambda whose cap S/300 >= p -- NOT by pushing
+# lambda below 30000 (that would drive single columns below the default 100 and
+# degrade the base/fidelity).
+DEFAULT_PARAM_TIERS: tuple[int, ...] = (25, 50, 100, 1000, 10000)
+
+
 def _primary_capability(backend: Backend):
     caps = [c for c in backend.supported_capabilities()
             if c.supported and c.name == "mcv"]
@@ -44,7 +55,7 @@ def measure_query_lambda(
     candidates: list[CandidateSet],
     *,
     levels: tuple[int, ...] = (0, 1, 2),
-    param_tiers: tuple[int, ...] = (100, 1000, 10000),
+    param_tiers: tuple[int, ...] = DEFAULT_PARAM_TIERS,
     outdir: Optional[Path] = None,
 ) -> dict:
     """Measure ``query`` across λ tiers; return its ``by_lambda`` block and, if
@@ -118,7 +129,7 @@ def measure_workload_lambda(
     cands_by_q: dict[str, list[CandidateSet]],
     *,
     levels: tuple[int, ...] = (0, 1, 2),
-    param_tiers: tuple[int, ...] = (100, 1000, 10000),
+    param_tiers: tuple[int, ...] = DEFAULT_PARAM_TIERS,
     workload: str = "default",
     outdir: Path,
 ) -> None:
