@@ -276,6 +276,7 @@ def measure_workload_lambda(
     param_tiers: Optional[tuple[int, ...]] = None,
     workload: str = "default",
     outdir: Path,
+    use_protocol_m: bool = False,
 ) -> None:
     """Measure a workload into ``<outdir>/per_lambda/<workload>/``.
 
@@ -283,7 +284,10 @@ def measure_workload_lambda(
     and backend (``<outdir>/per_lambda/<workload>/<backend>/``) so neither workload
     nor DBMS engine (which may hold the same columns but different native params)
     collide. ``param_tiers=None`` records the active backend's own representation
-    grid; levels default to :data:`DEFAULT_LAMBDA_LEVELS` (L2 off).
+    grid; levels default to :data:`DEFAULT_LAMBDA_LEVELS` (L2 off). When
+    ``use_protocol_m`` is true and the backend can catalog-mask, per-query
+    measurement uses :func:`measure_query_lambda_m` (one shared ANALYZE per λ)
+    instead of per-candidate Protocol-A.
     """
     dest = result_dir(outdir, workload, backend.name())
     dest.mkdir(parents=True, exist_ok=True)
@@ -313,7 +317,9 @@ def measure_workload_lambda(
     write_meta(dest, Meta(bench=workload, backend=backend.name(), tiers=tiers,
                           param_tiers=meta_pgrid))
 
+    measurer = measure_query_lambda_m if (
+        use_protocol_m and backend.supports_catalog_mask()) else measure_query_lambda
     for query in queries:
         cands = cands_by_q.get(query.qid, [])
-        measure_query_lambda(backend, query, cands, levels=levels,
-                             param_tiers=param_tiers, outdir=dest)
+        measurer(backend, query, cands, levels=levels,
+                 param_tiers=param_tiers, outdir=dest)
