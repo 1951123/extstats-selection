@@ -157,7 +157,8 @@ def measure_workload_lambda(
             single_tgt = rows = ep = None
         tiers.append(LambdaTier(level=level, S_rows=rows,
                                 single_target=single_tgt, estimate_percent=ep))
-    write_meta(dest, Meta(bench=workload, backend=backend.name(), tiers=tiers))
+    write_meta(dest, Meta(bench=workload, backend=backend.name(), tiers=tiers,
+                          param_tiers=param_tiers))
 
     for query in queries:
         cands = cands_by_q.get(query.qid, [])

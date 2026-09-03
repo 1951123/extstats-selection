@@ -54,7 +54,11 @@ class LambdaTier:
 class Meta:
     bench: str
     backend: str
+    # λ axis: the sample tiers sampled (level -> S_rows / single_target / ep).
     tiers: list[LambdaTier] = field(default_factory=list)
+    # ext representation-parameter axis (INDEPENDENT of λ; offered per λ only
+    # where p <= S_rows/300). Recorded so consumers know the full premeasure grid.
+    param_tiers: tuple[int, ...] = ()
     extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -62,6 +66,7 @@ class Meta:
             "bench": self.bench,
             "backend": self.backend,
             "tiers": [t.to_dict() for t in self.tiers],
+            "param_tiers": list(self.param_tiers),
             **self.extra,
         }
 
@@ -113,9 +118,11 @@ def read_meta(outdir: Path) -> Optional[Meta]:
         return None
     d = json.loads(p.read_text())
     tiers = [LambdaTier(**t) for t in d.get("tiers", [])]
-    extra = {k: v for k, v in d.items() if k not in ("bench", "backend", "tiers")}
+    param_tiers = tuple(d.get("param_tiers", []))
+    extra = {k: v for k, v in d.items()
+             if k not in ("bench", "backend", "tiers", "param_tiers")}
     return Meta(bench=d.get("bench", ""), backend=d.get("backend", ""),
-                tiers=tiers, extra=extra)
+                tiers=tiers, param_tiers=param_tiers, extra=extra)
 
 
 def read_query_measure(outdir: Path, qid: str) -> Optional[dict]:
