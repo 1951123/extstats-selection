@@ -91,22 +91,34 @@ def build_inner_at_level(
 
 
 def inner_optimal_at_level(blocks, level, budget_bytes, *,
-                           objective=OBJECTIVE_MEAN) -> tuple[ILPResult, list, list]:
-    """Solve the inner selection at one λ under a storage budget."""
+                           objective=OBJECTIVE_MEAN,
+                           maint_budget: Optional[float] = None,
+                           ) -> tuple[Optional[ILPResult], list, list]:
+    """Solve the inner selection at one λ under a storage (``budget_bytes``)
+    and, optionally, a maintenance budget (``maint_budget``) hard constraint.
+
+    With ``maint_budget=None`` the maintenance cost is reported but NOT enforced
+    (counted in ``res.total_maint``). When set, ``sum_s maint_cost(s)*y_s <= M``
+    is added (additive VAR model; the per-table FIXED component is handled
+    separately at the outer / MaintProfile layer).
+    """
     phys, opts, qbases = build_inner_at_level(blocks, level)
     if not opts:
         return None, phys, qbases
     res = solve_ilp(phys, opts, qbases, budget_bytes,
+                    maint_budget=maint_budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,
                     per_query_cap=1, objective=objective)
     return res, phys, qbases
 
 
 def search_lambda(outdir: Path, workload: str, backend: str,
-                  budget_bytes: int, *, fixed_per_table: Optional[dict] = None,
+                  budget_bytes: int, *, maint_budget: Optional[float] = None,
+                  fixed_per_table: Optional[dict] = None,
                   rho: float = 0.0) -> dict:
-    """Outer search over λ: for each tier solve the inner MILP under ``budget``,
-    and (if ``rho``/``fixed_per_table`` given) add Σ_t ρ·f_t(λ) per-table fixed.
+    """Outer search over λ: for each tier solve the inner MILP under
+    ``budget_bytes`` (storage) and (if given) ``maint_budget`` (maintenance hard
+    cap), and additionally add Σ_t ρ·f_t(λ) per-table fixed if rho/fixed given.
 
     Returns per-level outcome rows: {level, mean_qerror(baseline), mean_qerror(deployed),
     n_selected, total_bytes, total_maint, selected_summary}.
@@ -115,7 +127,8 @@ def search_lambda(outdir: Path, workload: str, backend: str,
     levels = [str(t.level) for t in (meta.tiers if meta else [])]
     out: dict[str, dict] = {}
     for level in levels:
-        res, phys, qbases = inner_optimal_at_level(blocks, level, budget_bytes)
+        res, phys, qbases = inner_optimal_at_level(
+            blocks, level, budget_bytes, maint_budget=maint_budget)
         if res is None:
             out[level] = {"status": "no-candidates", "baseline_mean": float(np.mean(qbases)) if qbases else None}
             continue
@@ -130,6 +143,8 @@ def search_lambda(outdir: Path, workload: str, backend: str,
             "baseline_mean": base_mean,
             "deployed_mean": res.mean_qerror,
             "total_with_fixed": float(res.mean_qerror) + fixed,
+            "budget_bytes": budget_bytes,
+            "maint_budget": maint_budget,
             "n_selected": len(res.selected_stats),
             "total_bytes": res.total_bytes,
             "total_maint": res.total_maint,

@@ -449,3 +449,29 @@ def test_lambda_consumer_per_lambda_baseline_and_lattice_candidates():
     assert qbases == [50.0]
     # per-λ baseline is used: the single option beats 50 -> included
     assert opts[0][0].qerror == 5.0
+
+
+def test_lambda_consumer_maint_budget_binds():
+    """A maintenance budget on the per-λ inner solver is a hard cap: it keeps
+    total_maint <= budget and (for a tight cap) drops selections."""
+    from extstats2.core.optimize_lambda import inner_optimal_at_level
+    # one query, λ0, many cheap storage / per-stat maint 0.1 candidates
+    cands = [(("a%d" % i, "b%d" % i), 100, float(i + 2), 50) for i in range(8)]
+    blocks = {"q1": _mk_lambda_block("q1", 100, {
+        "0": {"base": 100.0, "cands": cands},
+    })}
+
+    # no maint constraint: all 8 chosen (storage 8*50=400 allowed)
+    res, _, _ = inner_optimal_at_level(blocks, "0", budget_bytes=1000)
+    assert res is not None
+    assert res.total_maint == pytest.approx(8 * 0.1, abs=1e-6)
+    n_free = len(res.selected_stats)
+
+    # tight maint budget 0.25 forces <= 2 stats (0.1 each) chosen
+    res2, _, _ = inner_optimal_at_level(blocks, "0", budget_bytes=1000,
+                                        maint_budget=0.25)
+    assert res2 is not None
+    assert res2.total_maint <= 0.25 + 1e-9
+    assert len(res2.selected_stats) < n_free
+    assert 0 < len(res2.selected_stats) <= 3
+
