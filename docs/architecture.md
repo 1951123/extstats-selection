@@ -563,6 +563,26 @@ qerr>5 的 top-20 条（PG 枚举全部 2 列 mcv，`statistics_target=100`）�
 复现：`cross_focus`（小样本 3 条，perfect agreement）+ `cross_scale topk`（PG top-20 +
 Oracle 抽验）。结果 JSON 落在 `results/`。
 
+**(d2) 谓词形状 × 后端 ext 能力边界 —— Oracle column-group 只修等值/IN，不修范围（2026-09-03）。**
+(d) 里 query.465 的"PG 修好、Oracle 几乎不动"反例，其机制性解释（Oracle 官方文档 + optimizer
+团队确认）是 **Oracle 的 extended/column-group statistics 依据文档 principal 用于等值 / IN-list /
+GROUP BY 基数，不是一般多维 range histogram**：对 `BETWEEN`/`<=`/`>=` 这种同时多列范围，Oracle 的
+column-group 直方图不建模"二维分布里的矩形区域"，因此 CBO 从不对 range 谓词用它收紧选择性。PG 的
+`mcv`（多列统计）对等值**与**部分范围都会参与。故：
+
+- **跨后端一致的"主导组 wins"主要落在 query 内在是等值/低势枚举多列相关的结构**（query.62/184/61 =
+  很多 `= 0`/`= 1` → 等值 → 两库都修；(c) agreement）。这解释了 census 上完美的跨库一致。
+- **range 主导的 query**（posts 上大量 `Score<=.. AND ViewCount<=.. AND AnswerCount<=..`）PG 的 ext
+  能降（st.26 2.19→1.52、st.84 2.15→1.0 via `(FavoriteCount,PostTypeId)`），但 **Oracle 加同一个
+  column-group 后 estimate 完全不变**（诊断确认 group 已建出：`SYS_STUO_…` 隐藏列 100 桶 HEIGHT
+  BALANCED，但 CBO 未用）→ 这是 backend 能力边界，**不是测量 bug**。
+
+**含义**：extended-statistics selection 的"可修复集"和"哪个 backend 上有效"依赖**查询的是等值还是
+range 主导**。等值/IN 主导 query 驱动对引擎无关（可跨库比 one-stat sufficiency）；range 主导 query 上
+Oracle 的 column-group 基本不生效(需 dynamic stats 等列组之外机制)，PG 仍部分生效——**跨库会出现不对称**。
+建模/测量须把它当 oracle 能力契约记录(每个 candidate 声明自己谓词形状语境下的预期收益)，而非把
+"Oracle ext 对这些 query 无效"误当普通结论。CEBSI-range 类 query 上测 Oracle ext 需显式降低预期。
+
 **(e) 测量↔部署采样一致性的实证（[O-采样]）**。测量某 extstat 时的容量档，是否与部署
 时一致？在 PG 上对 query.62（truth=45，主导对 `(iRspouse,iWork89)`）做拆分实验，把
 "扩展统计自身的目标"与"整表 `default_statistics_target`（基础单列重扫档）"两个旋钮分开
