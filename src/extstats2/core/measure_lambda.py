@@ -24,7 +24,7 @@ from typing import Optional
 from ..backend.base import Backend, StatObject
 from ..backend.capabilities import Capacity
 from .candidates import CandidateSet
-from .measure_lambda_io import (LambdaTier, Meta, workload_dir, write_meta,
+from .measure_lambda_io import (LambdaTier, Meta, result_dir, write_meta,
                                 write_query_measure)
 from .queries import BenchQuery
 
@@ -136,9 +136,11 @@ def measure_workload_lambda(
     """Measure a workload into ``<outdir>/per_lambda/<workload>/``.
 
     Writes ``_meta.json`` + one ``<qid>.json`` per query, namespaced by workload
-    so multiple workloads (census, stats_CEB, ...) never collide.
+    and backend (``<outdir>/per_lambda/<workload>/<backend>/``) so neither workload
+    nor DBMS engine (which may hold the same columns but different native params)
+    collide.
     """
-    dest = workload_dir(outdir, workload)
+    dest = result_dir(outdir, workload, backend.name())
     dest.mkdir(parents=True, exist_ok=True)
     # meta describing the λ tiers actually realized (per the first table's row
     # count via a reference table; native params recorded by level).
