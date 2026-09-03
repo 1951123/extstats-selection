@@ -389,3 +389,48 @@ def test_y2_budget_binds_on_fixed_charge():
     # All three cheap stats selected => fixed 10 once + var 3*0.1 = 10.3 <= 12
     assert len(res.selected_stats) == 3
     assert res.total_maint == pytest.approx(10.3, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# per-λ (sampling-first) optimizer consumer — no live DB
+# ---------------------------------------------------------------------------
+
+def _mk_lambda_block(qid, actual, lam_blocks):
+    """Build a by_lambda block from {level: {base_qerr, cands:[(cols,param,qerr,size)]}}."""
+    by_lambda = {}
+    for level, c in lam_blocks.items():
+        slot = {"S_rows": None, "single_target": None,
+                "baseline": {"estimate": 1, "qerror": c["base"]},
+                "candidates": [
+                    {"cols": list(cols), "param": p, "estimate": 1,
+                     "qerror": qe, "lambda_q": None,
+                     "size_bytes": sz, "maint_var": 0.1}
+                    for cols, p, qe, sz in c["cands"]
+                ]}
+        by_lambda[str(level)] = slot
+    return {"qid": qid, "actual": actual, "by_lambda": by_lambda}
+
+
+def test_lambda_consumer_per_lambda_baseline_and_lattice_candidates():
+    """Each λ slot carries its own baseline + candidate params bounded by
+    p<=S/300; the consumer uses the λ-specific baseline (not a global one)."""
+    from extstats2.core.optimize_lambda import build_inner_at_level
+    # λ0 holds only p=100 (its baseline at 300k), λ1 offers p up to 1000.
+    blocks = {
+        "q1": _mk_lambda_block("q1", 100, {
+            "0": {"base": 50.0, "cands": [
+                (("a", "b"), 100, 5.0, 200), (("a", "b"), 1000, 4.0, 400)]},
+        }),
+    }
+    # cap for λ0 shown by which params appeared at measure time: here both are
+    # recorded, but the L0 slot legitimately cannot have p>S/300 measured; we
+    # hand only p=100 for L0:
+    blocks["q1"]["by_lambda"]["0"]["candidates"] = [
+        {"cols": ["a", "b"], "param": 100, "estimate": 1, "qerror": 5.0,
+         "lambda_q": None, "size_bytes": 200, "maint_var": 0.1}]
+    phys, opts, qbases = build_inner_at_level(blocks, "0")
+    assert len(phys) == 1
+    assert opts[0][0].level == 100
+    assert qbases == [50.0]
+    # per-λ baseline is used: the single option beats 50 -> included
+    assert opts[0][0].qerror == 5.0
