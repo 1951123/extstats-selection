@@ -57,3 +57,7 @@ paper/*.log
 paper/*.out
 paper/*.bbl
 paper/*.blg
+
+# --- Scratch (transient captures; keep *.py probes, drop logs/pycache) ---
+scratch/*.log
+scratch/__pycache__/

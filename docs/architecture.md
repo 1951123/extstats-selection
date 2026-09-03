@@ -712,6 +712,57 @@ $w_{t,\ell}$，使**每被激活表只付一次固定 ANALYZE 成本**（按其�
 > ext 候选在同一 λ 态下量、仅差是否含该对象 → 同-$S$ 公平配对。下方所有 $y_{C,p}$ 的 $C$ 都是
 > **多列组合**；单列选择性不作为独立干预。"修 marginal"已在 λ 的列坐标里被 $S_\lambda/300$ 涵盖。
 
+> **研究范围决策（2026-09-03，第二份定稿）：λ 是跨后端的标量；ext 的"表示参数"则既非跨后端、
+> 也未必是标量。** 上面的"范围声明"只确立了 λ 轴的不变性（$S_t$ 是引擎无关的采样深度，任何引擎
+> 用一个 scan knob/projection 表达），但**没有**对 param 轴作同类主张——而且**不该作**。辨析：
+>
+> - **λ（采样深度 $S_t$）是标量且跨后端**：一次共享扫描扫多深是引擎无关的物理量。仅它的"实现手柄"
+>   是每引擎不同的投影（PG：查 `minrows`→ 把所有单列 target 置为 $S_t/300$；Oracle：`estimate_percent`；
+>   `_meta.tiers[].single_target` vs `estimate_percent` 正是这个投影的落点）。
+> - **param（表示参数）既非跨后端同一坐标、也未必是单个标量**：它描述"在给定样本上，参数化摘要用
+>   多细刻画联合分布"，这个粗细反过来绑定引擎的统计对象形态：
+>   - **PG**：ext-stat 的表示恰好是一个标量——`attstattarget`（槽位/样本目标），一维。故 $p\le S_t/300$
+>     整数网格成立。
+>   - **Oracle**：column-group 的表示**不再是由一个标量闭合的量纲**。`SIZE buckets`（`method_opt` 里
+>     的桶数上限）只是其一；是否/以何种 histogram 型写（frequency/top-frequency/hybrid，由引擎按 NDV
+>     自动决定）、`SIZE` 对实际 `num_buckets` 只是一个**被引擎边界截断的上界**（超高、超 NDV 门限后不再
+>     增加)等因素共同决定"表示多细"。换言之 Oracle 侧"细粒"的更诚实描述是一个潜在**向量/结构**（例如
+>     hist 型 + 桶数 + 采样估计方式），而非我们 grid 里那个 `p`。
+>   - 一般化：不同引擎对"同一语义列组的 MCV/直方图"暴露全然不同的表示旋钮；可以语义上跨库指称
+>     "给 $(C_1,C_2)$ 建联合分布对象"，但**不能**预设"这个对象内部有多细"有一个共享标量坐标。
+> - **当下游的 `p` 都是"PG 投影"的记号简化**：§7bis 通篇的 $\,p\le S_t/300$、$p\in[0,S_t/300]\,$ 以及
+>   `param_tiers=(25,50,100,1000,10000)`，应读作 **PG 特有的表示坐标（$\approx$`attstattarget`）**，即
+>   PG 这个后端对抽象表示空间的**一个具体标量投影**，而不是通用模型本身。
+>
+> **结论/落地三点**：(i) λ 保持引擎无关标量并作外层决策（不变）；(ii) 抽象层不应假设表示参数 ==
+> 共享整数 grid；每个 backend 应声明自己的**表示参数空间**：形状（PG 标量 vs Oracle 多为向量/结构）
+> +其可行域/边界（PG `target` 可大；Oracle 桶数有引擎截断 → grid 顶端的 `1000/10000` 对该后端可能
+> 饱和、`SIZE 10000` 未必比 `SIZE 1000` 更细），并各自落到原生旋钮；(iii) 既存的 `param_tiers`
+> 要"降级"为 **per-backend 的表示采样点**（当前实为 PG 一例），跨后端 `_meta` 不能把两端同一整数
+> `p` 当成同物——Oracle side 的适配档应由它自己的表示空间与边界派生（具体量化见 Oracle bucket
+> saturation probe）。**首版实现可取"param = backend 标量投影 + 每后端 grid/界"这一收敛形式**，vector
+> 表示延后到真有多旋钮后端出现再显式建模；但文档口径从此按此节，不再把 §7bis 的 `p` 误当普适。
+
+> **Chaudhuri floor 只在使用它的引擎上约束 param——这正说明 param 空间是 DBMS 特定的（2026-09-03
+> 补充）。** 用一句话把这个不对称说全：
+>
+> - **PG：采样是被表示参数"撑"出来的**——`S=300·max(statistics_target)`（`analyze.c` minrows），故表中
+>   任一对象要有表示精度 `p`，就必须先采满 `S≥300·p`。于是 param 的有效值域**被一条 engine 强制的
+>   Chaudhuri floor 从下方约束**（`p≤S/300`），并经由 `max` 把所有单列/对象 target 耦合成同一份共享
+>   采样预算。
+> - **Oracle：采样与表示是**两个独立的 `GATHER_TABLE_STATS` 实参（`estimate_percent` vs `SIZE buckets`），
+>   **无 engine 强制的 floor**——浅扫+细桶、深扫+粗桶都被允许；`SIZE` 对引擎只是"最多给多少桶"的
+>   上限，实际桶由（histogram 型 + NDV + `SIZE`）收敛到自然桶（实测：低-中 NDV 对象多在此悬崖/平台，
+>   见 oracle saturation probe）。统计健全性要不要 `p` 受采样支撑，在 Oracle 上是 optimizer/用户层的
+>   **可选护栏**，不是引擎约束。
+>
+> **推论：两引擎的"表示参数空间"不只是刻度不同，而是【空间本身异构、各自的可行域来源不同】。** PG 上的
+> 表示坐标（`attstattarget`，受 floor 下限）与 Oracle 上的表示坐标（引擎收敛的桶/结构，无 floor 下限）
+> **没有一一对应的同一量纲**；所以既不能再共用一个整数 param grid，连"把同一抽象 param 投影到两边"
+> 也只是近似。需每 backend 各自声明表示参数空间的**形状 +（是否有 floor）+ 可行域**，并给出自己
+> 的采样点（PG 取大标量格、Oracle 取 tiny `{64,254}` 等引擎忠实档）。这正是上面「落地三点 (ii/iii)」与
+> `representation_param_tiers` per-backend grid 的根据。
+
 **采样优先 + param 上界晶格（PG 唯一真限制）。** PG 对"容量"真正施加的只有一条约束（`analyze.c`
 `minrows = 300·target`；引 Chaudhuri–Motwani–Narasayya SIGMOD'98）：
 

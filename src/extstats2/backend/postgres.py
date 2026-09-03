@@ -644,6 +644,13 @@ class PostgresBackend(Backend):
             return None
         return float(min(300.0 * int(self._ladder[level]), n))
 
+    def representation_param_tiers(self, table: str | None = None) -> tuple[int, ...]:
+        """PG represents ext-stat detail as a scalar ``attstattarget`` and gives
+        genuinely finer histograms up to large integer targets, so the grid keeps
+        the full PG-native range (each level is internally capped by the λ lattice
+        ``S/300`` in the driver when the object's param is actually built)."""
+        return (25, 50, 100, 1000, 10000)
+
     def max_param_at_level(self, table: str, level: int) -> Optional[float]:
         """Lattice cap ``S_level/300`` = the λ single-column handle (PG)."""
         t = self._target_for_level(table, level)

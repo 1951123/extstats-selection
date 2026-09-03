@@ -263,6 +263,26 @@ class OracleBackend(Backend):
         already directly sets the sample; no single-column target involved)."""
         return self.sample_rows_per_level(table, level)
 
+    def lambda_sampling_percent(self, table: str, level: int) -> Optional[float]:
+        """Oracle's native ``estimate_percent`` that realizes λ at ``level``
+        (1/10/100 = the ladder's sampling knob)."""
+        ep, _ = self._native(Capacity(level))
+        return float(ep)
+
+    # Oracle's representation grid: engine-faithful operating points, NOT the
+    # PG scalar ``attstattarget`` list. Verified (2026-09-03, q.184 driver pair):
+    # ``SIZE`` is a HARD per-object upper cap; sub-natural buckets sit on a qerr
+    # cliff and >~254 adds nothing for column groups (>=~10000 is an illegal
+    # method_opt literal, ORA-20000). A tiny grid {64, 254} spans "a real
+    # low-resolution threshold" and "let the engine choose freely"; 254 is the
+    # classic column-group bucket headroom so most objects plateau there.
+    _PARAM_TIERS: tuple[int, ...] = (64, 254)
+    #: max legal ``SIZE`` literal (Oracle rejects >= 10000 in method_opt).
+    _MAX_PARAM: int = 1000
+
+    def representation_param_tiers(self, table: str | None = None) -> tuple[int, ...]:
+        return tuple(self._PARAM_TIERS)
+
     def single_col_target_for_level(self, table: str, level: int) -> Optional[int]:
         """Oracle realizes λ via ``estimate_percent`` (scan knob), NOT a single-column
         target — there is no per-column statistics_target knob on Oracle."""

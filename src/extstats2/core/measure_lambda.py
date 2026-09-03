@@ -37,7 +37,20 @@ from .queries import BenchQuery
 # low detail) is offered at ANY lambda whose cap S/300 >= p -- NOT by pushing
 # lambda below 30000 (that would drive single columns below the default 100 and
 # degrade the base/fidelity).
+#
+# NOTE (2026-09-03): the param grid is NO LONGER a single cross-backend list.
+# It is per-backend representation sampling points (PG = its native scalar
+# ``attstattarget`` range; Oracle = an engine-faithful tiny grid, see
+# ``Backend.representation_param_tiers``). ``DEFAULT_PARAM_TIERS`` is kept only
+# as a PG-flavoured fallback; callers should pass ``param_tiers=None`` to use
+# the active backend's own grid.
 DEFAULT_PARAM_TIERS: tuple[int, ...] = (25, 50, 100, 1000, 10000)
+
+#: Active experiment λ-tiers during the fast-measurement phase. L2 (full scan,
+#: ~22 s/gather on Oracle) is dropped for now to keep experiments fast; it can be
+#: restored later by passing ``levels=(0, 1, 2)`` when a deterministic absolute
+#: baseline / final paper figures are needed.
+DEFAULT_LAMBDA_LEVELS: tuple[int, ...] = (0, 1)
 
 
 def _primary_capability(backend: Backend):
@@ -49,21 +62,35 @@ def _primary_capability(backend: Backend):
     return caps[0]
 
 
+def _resolve_param_tiers(backend: Backend,
+                         param_tiers: Optional[tuple[int, ...]],
+                         table: str) -> tuple[int, ...]:
+    """Resolve the representation-param grid: caller override, else per-backend."""
+    if param_tiers is not None:
+        return tuple(param_tiers)
+    return tuple(backend.representation_param_tiers(table) or ())
+
+
 def measure_query_lambda(
     backend: Backend,
     query: BenchQuery,
     candidates: list[CandidateSet],
     *,
-    levels: tuple[int, ...] = (0, 1, 2),
-    param_tiers: tuple[int, ...] = DEFAULT_PARAM_TIERS,
+    levels: tuple[int, ...] = DEFAULT_LAMBDA_LEVELS,
+    param_tiers: Optional[tuple[int, ...]] = None,
     outdir: Optional[Path] = None,
 ) -> dict:
     """Measure ``query`` across λ tiers; return its ``by_lambda`` block and, if
-    ``outdir`` given, write it as ``<outdir>/<qid>.json``."""
+    ``outdir`` given, write it as ``<outdir>/<qid>.json``.
+
+    ``param_tiers=None`` uses the active backend's own representation grid
+    (:meth:`Backend.representation_param_tiers`); levels default to
+    :data:`DEFAULT_LAMBDA_LEVELS` (L2 off during the fast-experiment phase)."""
     cap_obj = _primary_capability(backend)
     by_lambda: dict[str, dict] = {}
     # Determine the query table from the first candidate (single-table benchs).
     table = candidates[0].table if candidates else ".climate"
+    pgrid = _resolve_param_tiers(backend, param_tiers, table)
 
     for level in levels:
         rows = backend.lambda_sampling_rows(table, level)
@@ -83,7 +110,7 @@ def measure_query_lambda(
         n = backend.num_rows(table) or 1.0
         # 2) candidates within param <= cap
         for cand in candidates:
-            for p in param_tiers:
+            for p in pgrid:
                 if cap_p is not None and p > cap_p:
                     continue  # Direction B: param above this λ's lattice cap
                 # name unique per (table, cols, level, param)
@@ -128,8 +155,8 @@ def measure_workload_lambda(
     queries: list[BenchQuery],
     cands_by_q: dict[str, list[CandidateSet]],
     *,
-    levels: tuple[int, ...] = (0, 1, 2),
-    param_tiers: tuple[int, ...] = DEFAULT_PARAM_TIERS,
+    levels: tuple[int, ...] = DEFAULT_LAMBDA_LEVELS,
+    param_tiers: Optional[tuple[int, ...]] = None,
     workload: str = "default",
     outdir: Path,
 ) -> None:
@@ -138,7 +165,8 @@ def measure_workload_lambda(
     Writes ``_meta.json`` + one ``<qid>.json`` per query, namespaced by workload
     and backend (``<outdir>/per_lambda/<workload>/<backend>/``) so neither workload
     nor DBMS engine (which may hold the same columns but different native params)
-    collide.
+    collide. ``param_tiers=None`` records the active backend's own representation
+    grid; levels default to :data:`DEFAULT_LAMBDA_LEVELS` (L2 off).
     """
     dest = result_dir(outdir, workload, backend.name())
     dest.mkdir(parents=True, exist_ok=True)
@@ -150,17 +178,23 @@ def measure_workload_lambda(
         if cl:
             table = cl[0].table
             break
+    # Record the effective representation grid in _meta (backend-native unless
+    # the caller explicitly overrode it).
+    if table is not None:
+        meta_pgrid = _resolve_param_tiers(backend, param_tiers, table)
+    else:
+        meta_pgrid = tuple(param_tiers) if param_tiers is not None else ()
     for level in levels:
         if table is not None:
             single_tgt = backend.single_col_target_for_level(table, level)
             rows = backend.lambda_sampling_rows(table, level)
-            ep = None
+            ep = backend.lambda_sampling_percent(table, level)
         else:
             single_tgt = rows = ep = None
         tiers.append(LambdaTier(level=level, S_rows=rows,
                                 single_target=single_tgt, estimate_percent=ep))
     write_meta(dest, Meta(bench=workload, backend=backend.name(), tiers=tiers,
-                          param_tiers=param_tiers))
+                          param_tiers=meta_pgrid))
 
     for query in queries:
         cands = cands_by_q.get(query.qid, [])

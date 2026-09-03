@@ -312,6 +312,31 @@ class Backend(ABC):
         """
         return self.sample_rows_per_level(table, level)
 
+    def lambda_sampling_percent(self, table: str, level: int) -> Optional[float]:
+        """The engine's native percent-of-scan that realizes λ at ``level``.
+
+        ``None`` on engines (PG) that realize λ via a single-column *target*
+        rather than a percent; Oracle returns its ``estimate_percent`` (1/10/100).
+        Recorded in ``per_lambda`` ``_meta.json`` so the same abstract λ level
+        maps to a backend-specific sampling knob for cross-backend comparison.
+        """
+        return None
+
+    def representation_param_tiers(self, table: str | None = None) -> tuple[int, ...]:
+        """The representation-param sampling points this *backend* offers for its
+        extended-stat objects, in its OWN units (NOT a cross-backend shared list).
+
+        This makes concrete the "param is not cross-backend / not necessarily a
+        single scalar" decision (§7bis 2nd 定稿 + architecture.md): PG expresses
+        representation as a scalar ``attstattarget`` and can take large values
+        (25..10000 with real differentiation), whereas Oracle's ``SIZE`` is a
+        hard per-object upper cap with a "natural bucket" plateau — sub-natural
+        SIZE values sit on a quality cliff and >~254 adds nothing for column
+        groups (and >=10000 is an illegal literal). Backends override with the
+        points that produce meaningfully distinct (qerr, size) operating points.
+        """
+        return (25, 50, 100, 1000, 10000)
+
     def max_param_at_level(self, table: str, level: int) -> Optional[float]:
         """Lattice cap on a representation param at λ-tier ``level``: ``S/300``.
 
