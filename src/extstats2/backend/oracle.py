@@ -256,6 +256,40 @@ class OracleBackend(Backend):
                 "estimate_percent=>:ep, degree=>:d); END;",
                 {"ep": estimate_percent, "d": degree})
 
+    # -- λ-first (sampling-first, §7bis) realization ----------------------
+
+    def lambda_sampling_rows(self, table: str, level: int) -> Optional[float]:
+        """S at λ-tier ``level`` = ``estimate_percent/100 · N`` (Oracle's scan knob
+        already directly sets the sample; no single-column target involved)."""
+        return self.sample_rows_per_level(table, level)
+
+    def single_col_target_for_level(self, table: str, level: int) -> Optional[int]:
+        """Oracle realizes λ via ``estimate_percent`` (scan knob), NOT a single-column
+        target — there is no per-column statistics_target knob on Oracle."""
+        return None
+
+    def enter_lambda_state(self, table: str, level: int) -> None:
+        """Realize λ-tier ``level``: one single-column-only GATHER at that λ's
+        ``estimate_percent`` (SIZE AUTO — natural single-col histograms), no column
+        group. After this, ``estimate`` = the no-ext per-λ baseline ``e^0(S)``."""
+        ep, _ = self._native(Capacity(level))
+        self.restore_natural_stats(table, estimate_percent=ep)
+
+    def build_stat_param(self, obj: StatObject, param: int) -> None:
+        """Build one column group at an explicit ``param`` buckets, at the current
+        λ's estimate_percent (the λ-state scan depth). Decouples the object's
+        bucket count from the level ladder, matching the λ-first model."""
+        ep, _ = self._native(obj.capacity)          # this λ's scan %
+        group = "(" + ",".join(self._q_cols(obj.columns)) + ")"
+        mo = (f"FOR ALL COLUMNS SIZE AUTO FOR COLUMNS {group} SIZE {int(param)}")
+        tname = self._q_table(obj.table)
+        with self._cur() as cur:
+            cur.execute(
+                "BEGIN DBMS_STATS.GATHER_TABLE_STATS("
+                f"ownname=>'{self._owner}', tabname=>'{tname}', "
+                "method_opt=>:m, estimate_percent=>:ep, degree=>1); END;",
+                {"m": mo, "ep": ep})
+
     # -- estimation --------------------------------------------------------
 
     def estimate(self, query: BenchQuery) -> Estimate:
