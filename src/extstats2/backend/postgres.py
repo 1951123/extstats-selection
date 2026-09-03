@@ -280,6 +280,9 @@ class PostgresBackend(Backend):
         # Flip to True once measure_query dispatches on Protocol-M.
         return False
 
+    def supports_catalog_mask(self) -> bool:
+        return True
+
     def catalog_driver(self) -> PgCatalogDriver:
         """Return this backend's Protocol-M catalog driver."""
         return PgCatalogDriver(self)
@@ -371,6 +374,29 @@ class PostgresBackend(Backend):
                 f"SET STATISTICS {int(param)}"
             )
             cur.execute(f"ANALYZE {_clean_table(obj.table)}")
+
+    def build_stat_params_batch(self, objs_params: list[tuple[StatObject, int]]) -> None:
+        """Protocol-M build: set each object's OWN target, then ONE ANALYZE per
+        table builds them all from the established (λ-state) shared scan.
+
+        The single columns are already at ``S/300`` (via :meth:`enter_lambda_state`),
+        so ``targrows`` is already the deep ``S``; each object's own
+        ``SET STATISTICS p`` (``p ≤ S/300``) only sets its retained representation
+        without re-scanning for each one. This is the batch step that de-amortizes
+        Protocol-A's per-object ANALYZE into a single shared scan.
+        """
+        tables = sorted({obj.table for obj, _ in objs_params})
+        for tbl in tables:
+            self._ensure_single_columns_pinned(tbl)
+        with self.conn.cursor() as cur:
+            for obj, param in objs_params:
+                cur.execute(
+                    f"ALTER STATISTICS {self._q(obj.name)} "
+                    f"SET STATISTICS {int(param)}"
+                )
+        for tbl in tables:
+            with self.conn.cursor() as cur:
+                cur.execute(f"ANALYZE {_clean_table(tbl)}")
 
     # -- estimation --------------------------------------------------------
 

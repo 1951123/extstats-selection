@@ -150,6 +150,123 @@ def measure_query_lambda(
     return block
 
 
+def measure_query_lambda_m(
+    backend: Backend,
+    query: BenchQuery,
+    candidates: list[CandidateSet],
+    *,
+    levels: tuple[int, ...] = DEFAULT_LAMBDA_LEVELS,
+    param_tiers: Optional[tuple[int, ...]] = None,
+    outdir: Optional[Path] = None,
+) -> dict:
+    """Protocol-M (catalog-mask) per-λ measurement; same output shape as
+    ``measure_query_lambda`` but de-amortizes the fixed scan.
+
+    For each λ tier: ``enter_lambda_state`` gives the no-ext baseline ``e^0`` in
+    the S_λ state; then ALL (candidate, param) objects are created and built in a
+    SINGLE ANALYZE (``build_stat_params_batch`` — each object set to its own
+    param, shared by the established S_λ scan). Each (candidate, param) is then
+    read by masking every other object's payload (Protocol-M), rather than
+    re-ANALYZE per candidate (Protocol-A). Same-sample mask == drop is verified,
+    so this measures the same q-error with far fewer scans (per-λ once, not per
+    candidate).
+
+    Same-sample mask == drop is verified
+    (repo memory 2026-09-03; q.184 M==A est/qerr exactly), so this measures the
+    same state/per-λ q-error as Protocol-A but with ~1 scan per λ instead of
+    #(cand,param) scans.
+
+    Deterministic per-λ: each tier uses its OWN S_λ scan (NOT a shared max-λ
+    scan), so it does NOT reproduce v1 Protocol-M's large-sample bias.
+    """
+    if not backend.supports_catalog_mask():
+        # Not a mask-capable backend: fall back to Protocol-A semantics.
+        return measure_query_lambda(backend, query, candidates, levels=levels,
+                                    param_tiers=param_tiers, outdir=outdir)
+
+    cap_obj = _primary_capability(backend)
+    table = candidates[0].table if candidates else ".climate"
+    pgrid = _resolve_param_tiers(backend, param_tiers, table)
+    by_lambda: dict[str, dict] = {}
+    driver = backend.catalog_driver()
+
+    for level in levels:
+        rows = backend.lambda_sampling_rows(table, level)
+        single_tgt = backend.single_col_target_for_level(table, level)
+        cap_p = backend.max_param_at_level(table, level)
+
+        # 1) per-λ no-ext baseline in the λ-state
+        backend.enter_lambda_state(table, level)
+        for s in list(backend.list_stats(table)):
+            backend.drop_stat(s)
+        be = backend.estimate(query)
+        baseline = {"estimate": be.estimate,
+                    "qerror": be.qerror if be.qerror is not None else float("nan")}
+
+        # 2) materialize every (cand, param) object that fits the lattice cap
+        objs: list[StatObject] = []
+        for cand in candidates:
+            for p in pgrid:
+                if cap_p is not None and p > cap_p:
+                    continue
+                cols_t = "_".join(str(c).lower() for c in cand.columns)
+                name = f"ext_m_{table.rpartition('.')[2]}_{cols_t}_l{level}_{p}"
+                obj = StatObject(table=cand.table, columns=cand.columns,
+                                 capability=cap_obj, capacity=Capacity(level,
+                                 label=f"L{level}-p{p}"),
+                                 name=name)
+                backend.create_stat(obj)
+                objs.append((obj, p))
+
+        bkp = None
+        try:
+            # ONE ANALYZE builds ALL objects from this λ's S_λ scan (Protocol-M)
+            backend.build_stat_params_batch(objs)
+            n = backend.num_rows(table) or 1.0
+            all_objs = [o for o, _ in objs]
+            bkp = driver.backup_payloads(all_objs)
+            slot_cands = []
+            for obj, p in objs:
+                bkp.mask_all_but({obj})         # NULL every other object
+                try:
+                    est = backend.estimate(query)
+                    size = backend.stat_size_bytes(obj)
+                    mv = backend.stat_maintain_var(obj)
+                    lam_q = (query.ground_truth / n) * (rows or 0.0) \
+                        if query.ground_truth else None
+                    slot_cands.append({
+                        "cols": list(obj.columns), "param": p,
+                        "estimate": est.estimate,
+                        "qerror": est.qerror if est.qerror is not None else float("nan"),
+                        "lambda_q": lam_q,
+                        "size_bytes": size, "maint_var": mv,
+                    })
+                finally:
+                    bkp.restore()
+        finally:
+            if bkp is not None:
+                try:
+                    bkp.close()
+                except Exception:
+                    pass
+            for obj, _ in objs:
+                try:
+                    backend.drop_stat(obj)
+                except Exception:
+                    pass
+
+        by_lambda[str(level)] = {
+            "S_rows": rows, "single_target": single_tgt,
+            "baseline": baseline, "candidates": slot_cands,
+        }
+
+    block = {"qid": query.qid, "actual": query.ground_truth,
+             "by_lambda": by_lambda}
+    if outdir is not None:
+        write_query_measure(outdir, block)
+    return block
+
+
 def measure_workload_lambda(
     backend: Backend,
     queries: list[BenchQuery],

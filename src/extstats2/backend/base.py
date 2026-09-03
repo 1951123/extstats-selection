@@ -372,6 +372,28 @@ class Backend(ABC):
         mapping. Backends override; default falls back to a normal build."""
         self.build_stats([obj], obj.capacity)
 
+    def build_stat_params_batch(self, objs_params: list[tuple[StatObject, int]]) -> None:
+        """Protocol-M batch: build several objects at their OWN params, de-
+        amortizing the shared (λ-state) scan into ONE ANALYZE instead of N.
+
+        PG overrides (SET each object's target, then ANALYZE once). The default
+        (no inline-mask backend) falls back to per-object ``build_stat_param`` —
+        correct but slower (Protocol-A), used only when the backend cannot batch.
+        """
+        for obj, param in objs_params:
+            self.build_stat_param(obj, param)
+
+    def supports_catalog_mask(self) -> bool:
+        """Whether this backend can inline-mask statistic payloads (Protocol-M).
+
+        PostgreSQL does (NULL-mask ``pg_statistic_ext_data``); Oracle cannot, so
+        it returns False and measurement falls back to Protocol-A semantics."""
+        return False
+
+    def catalog_driver(self) -> Optional["CatalogDriver"]:
+        """Return this backend's catalog driver for Protocol-M masking, or None."""
+        return None
+
     # -- isolation ---------------------------------------------------------
 
     @abstractmethod

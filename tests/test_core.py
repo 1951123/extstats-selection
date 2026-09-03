@@ -237,6 +237,21 @@ def test_oracle_protocol_falls_back_to_a():
     assert be.protocol("m") == "a"  # requested m falls back to a
 
 
+def test_catalog_mask_capability_contract():
+    """PG advertises inline catalog-mask (Protocol-M) + a driver; Oracle does not."""
+    from extstats2.core.measure_lambda import measure_query_lambda_m
+    pg = get_backend("postgres")
+    orc = get_backend("oracle")
+    assert pg.supports_catalog_mask() is True
+    assert pg.catalog_driver() is not None
+    assert orc.supports_catalog_mask() is False
+    assert orc.catalog_driver() is None
+    # measure_query_lambda_m is importable and shares measure_query_lambda's fallback
+    # entry (callers on non-mask backends get Protocol-A, tested in integration).
+    assert callable(measure_query_lambda_m)
+
+
+
 def test_capacity_contract():
     from extstats2.config import capacity_ladder
     assert set(capacity_ladder("postgres")) == {0, 1, 2}
