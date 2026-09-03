@@ -356,6 +356,22 @@ class PostgresBackend(Backend):
             with self.conn.cursor() as cur:
                 cur.execute(f"ANALYZE {_clean_table(tbl)}")
 
+    def build_stat_param(self, obj: StatObject, param: int) -> None:
+        """Build one statistic ``obj`` at an explicit ``param`` in the current
+        (λ) state: ``ALTER STATISTICS ... SET STATISTICS <param>`` + one ANALYZE.
+
+        In the λ-first model the table's single columns are already at the λ-state
+        target ``S/300`` (set by :meth:`enter_lambda_state`), which already forces
+        the depth; setting the object's own target to ``param`` (≤ ``S/300``) just
+        controls its retained representation without changing the shared scan.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"ALTER STATISTICS {self._q(obj.name)} "
+                f"SET STATISTICS {int(param)}"
+            )
+            cur.execute(f"ANALYZE {_clean_table(obj.table)}")
+
     # -- estimation --------------------------------------------------------
 
     def estimate(self, query: BenchQuery) -> Estimate:
@@ -486,39 +502,48 @@ class PostgresBackend(Backend):
     # has a floor of ~300*this per the ANALYZE scan.
     _SINGLE_COL_STATISTICS_TARGET = 100
 
-    # ---- single-column target pinning ---------------------------------
-    def _ensure_single_columns_pinned(self, table: str) -> None:
-        """Pin every regular column of ``table`` to the single-col target (100).
-
-        This makes per-column base statistics deterministic across extended-stat
-        builds and establishes the targrows floor (max(300*100, 300*target)).
-        Pinning is per (connection, table) and cached. Extended-stat hidden
-        columns are excluded (they don't take an ALTER COLUMN target).
-        """
+    # ---- single-column target control ----------------------------------
+    def _regular_columns(self, table: str) -> list[str]:
+        """Names of ``table``'s regular (non-system) columns (dotted '.' ok)."""
         base = _clean_table(table).rpartition(".")[2]
-        if base in self._pinned_single:
-            return
-        tgt = int(self._SINGLE_COL_STATISTICS_TARGET)
         with self.conn.cursor() as cur:
-            # keep the connection default at 100 so any not-explicitly-pinned
-            # column defaults to the single-col target as well
-            cur.execute(f"SET default_statistics_target = {tgt}")
             cur.execute(
                 "SELECT a.attname FROM pg_attribute a "
                 "JOIN pg_class c ON c.oid = a.attrelid "
                 "WHERE c.relname = %s AND a.attnum > 0 AND NOT a.attisdropped "
                 "AND a.attidentity = '' AND a.attgenerated = ''",
                 (base,))
-            cols = [r[0] for r in cur.fetchall()]
-        for col in cols:
-            try:
-                with self.conn.cursor() as cur:
+            return [r[0] for r in cur.fetchall()]
+
+    def _set_all_columns_target(self, table: str, tgt: int, analyze: bool = True) -> None:
+        """Set every regular column's ``attstattarget`` to ``tgt`` and match the
+        session default; optionally ANALYZE once to realize the depth.
+
+        This is the PG realization of a λ-state: with all single columns at ``tgt``
+        (== ``S/300``) they are the max, so ``targrows >= 300*tgt = S``.
+        """
+        tgt = int(tgt)
+        with self.conn.cursor() as cur:
+            cur.execute(f"SET default_statistics_target = {tgt}")
+            for col in self._regular_columns(table):
+                try:
                     cur.execute(
                         f"ALTER TABLE {_clean_table(table)} "
                         f"ALTER COLUMN {col} SET STATISTICS {tgt}")
-            except Exception:
-                # skip columns that cannot take a per-column target
-                pass
+                except Exception:
+                    pass
+            if analyze:
+                cur.execute(f"ANALYZE {_clean_table(table)}")
+
+    def _ensure_single_columns_pinned(self, table: str) -> None:
+        """Pin every regular column to ``_SINGLE_COL_STATISTICS_TARGET`` (100),
+        per (connection, table), cached (legacy 100-pin; kept for back-compat).
+        Does NOT ANALYZE — callers ANALYZE when they build."""
+        base = _clean_table(table).rpartition(".")[2]
+        if base in self._pinned_single:
+            return
+        self._set_all_columns_target(
+            table, self._SINGLE_COL_STATISTICS_TARGET, analyze=False)
         self._pinned_single.add(base)
 
     def _reltuples(self, table: str) -> float:
@@ -595,6 +620,51 @@ class PostgresBackend(Backend):
     def num_rows(self, table: str) -> Optional[float]:
         n = self._reltuples(table)
         return None if n <= 0 else float(n)
+
+    # -- λ-first (sampling-first, §7bis) realization ----------------------
+
+    def _target_for_level(self, table: str, level: int) -> Optional[int]:
+        """PG native statistics_target for λ-tier ``level`` (== S_level/300)."""
+        if level not in self._ladder:
+            return None
+        n = self._reltuples(table)
+        if n <= 0:
+            return None
+        # S_level = min(300*target, N); its column handle = S/l300 = min(t, N/300)
+        t_raw = int(self._ladder[level])
+        return int(min(t_raw, n / 300.0))
+
+    def lambda_sampling_rows(self, table: str, level: int) -> Optional[float]:
+        """S_level = rows ANALYZEd at λ-tier ``level`` with all single columns at
+        the λ target (no 100 floor; λ-first) — ``= min(300*target, N)``."""
+        if level not in self._ladder:
+            return None
+        n = self._reltuples(table)
+        if n <= 0:
+            return None
+        return float(min(300.0 * int(self._ladder[level]), n))
+
+    def max_param_at_level(self, table: str, level: int) -> Optional[float]:
+        """Lattice cap ``S_level/300`` = the λ single-column handle (PG)."""
+        t = self._target_for_level(table, level)
+        return float(t) if t is not None else None
+
+    def single_col_target_for_level(self, table: str, level: int) -> Optional[int]:
+        """The exact integer to set every single column's ``attstattarget`` to in
+        order to realize λ-tier ``level`` (== max_param_at_level)."""
+        return self._target_for_level(table, level)
+
+    def enter_lambda_state(self, table: str, level: int) -> None:
+        """Realize λ-tier ``level``: set ALL single columns to
+        ``attstattarget = S/300`` and ANALYZE once (no extended stat present).
+
+        After this, ``estimate`` = no-ext per-λ baseline ``e^0(S_level)``; an
+        extended object later built at ``param ≤ S_level/300`` shares this depth.
+        """
+        tgt = self._target_for_level(table, level)
+        if tgt is None:
+            raise KeyError(f"level {level} not in ladder {self._ladder}")
+        self._set_all_columns_target(table, tgt, analyze=True)
 
     @staticmethod
     def _q(name: str) -> str:

@@ -302,6 +302,51 @@ class Backend(ABC):
         """Estimated row count of ``table`` (None if unknown)."""
         return None
 
+    # -- lambda-state realization (sampling-first model, §7bis) -----------
+
+    def lambda_sampling_rows(self, table: str, level: int) -> Optional[float]:
+        """Rows the shared ANALYZE/GATHER samples at λ-tier ``level`` (= S_level).
+
+        Alias for :meth:`sample_rows_per_level` (the sample-tier ``S``). Default
+        delegates; backends may override if the λ coordinate differs.
+        """
+        return self.sample_rows_per_level(table, level)
+
+    def max_param_at_level(self, table: str, level: int) -> Optional[float]:
+        """Lattice cap on a representation param at λ-tier ``level``: ``S/300``.
+
+        On PG this equals the single-column target (``S_level/300``). Backends
+        return ``None`` if the cap is not engine-imposed (Oracle) — the caller
+        then applies it as an optional guard.
+        """
+        rows = self.lambda_sampling_rows(table, level)
+        return None if rows is None else rows / 300.0
+
+    def single_col_target_for_level(self, table: str, level: int) -> Optional[int]:
+        """PG's native handle realizing λ at ``level``: set every single column
+        to this attribute target. Oracle returns ``None`` (it uses
+        ``estimate_percent`` instead)."""
+        cap = self.max_param_at_level(table, level)
+        return None if cap is None else int(cap)
+
+    def enter_lambda_state(self, table: str, level: int) -> None:
+        """Realize λ-tier ``level`` on ``table``: all single columns at
+        ``S_level/300`` (PG) / a single-col gather at depth (Oracle), and **no
+        extended statistic present**. After this, ``estimate`` gives the no-ext
+        per-λ baseline ``e^0(S_level)``; a candidate object added at
+        ``param ≤ S_level/300`` shares this established deep scan (free-rider).
+        Backends must override to actually realize the depth; the default only
+        sets the abstract capacity and is not physically meaningful.
+        """
+        self.set_capacity(Capacity(level))
+
+    def build_stat_param(self, obj: StatObject, param: Any) -> None:
+        """Build a single extended statistic ``obj`` at an explicit representation
+        ``param``, in the current (λ) state whose shared scan depth is set by the
+        single columns. This decouples the object's param from any capacity-level
+        mapping. Backends override; default falls back to a normal build."""
+        self.build_stats([obj], obj.capacity)
+
     # -- isolation ---------------------------------------------------------
 
     @abstractmethod
