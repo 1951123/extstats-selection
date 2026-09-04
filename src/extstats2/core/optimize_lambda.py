@@ -60,10 +60,16 @@ def build_inner_at_level(
     qbase_list: list[float] = []
 
     for qid, block in blocks.items():
+        # A query with true cardinality 0 has no well-defined q-error (est/0);
+        # drop it from the optimization problem (only DMV hits this, 2/1926).
+        if block.get("actual", 1) == 0:
+            continue
         slot = block["by_lambda"].get(level)
         if slot is None:
             continue
         base = float(slot["baseline"]["qerror"])
+        if base != base:      # NaN baseline (e.g. est/0 when truth==0) -> skip
+            continue
         qbase_list.append(base)
         opts: list[Option] = []
         for cd in slot.get("candidates", []):
