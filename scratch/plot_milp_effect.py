@@ -1,16 +1,17 @@
-"""Plot budget-vs-quality curves for the dense-11 census MILP at λ=0 and λ=1.
+"""Plot budget-vs-quality curves for the MILP effect-time at λ=0 and λ=1.
 
-Reads results/milp_effect_time_L{0,1}.json (top-level {"level":.., "rows":[...]})
-and produces a 2x2 figure:
+Reads results/milp_effect_time[_{bench}]_L{0,1}.json (top-level {"level":..,
+"rows":[...]}) and produces a 2x2 figure:
   (a) mean per-query q-error
   (b) geometric-mean q-error
   (c) max per-query q-error (tail)
   (d) MILP solve time (s)
 x-axis = storage budget in bytes (log scale), one curve per λ tier.
-Output: results/figures/milp_effect_time.png (default).
+Output: results/figures/milp_effect_time[_<bench>].png.
 
 Usage:
-  .venv/bin/python -u scratch/plot_milp_effect.py [--out results/figures/milp_effect_time.png]
+  .venv/bin/python -u scratch/plot_milp_effect.py                    # census (default)
+  .venv/bin/python -u scratch/plot_milp_effect.py --bench dmv        # dmv
 """
 from __future__ import annotations
 
@@ -24,28 +25,55 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUT = ROOT / "results" / "figures" / "milp_effect_time.png"
 
 # shared style
 COLOR = {"0": "#1f77b4", "1": "#d62728"}
 LABEL = {"0": "λ = L0  (S/300 = 100)", "1": "λ = L1  (S/300 = 1000)"}
 
 
-def load_lv(lv: str) -> dict:
-    p = ROOT / "results" / f"milp_effect_time_L{lv}.json"
+def load_lv(bench: str, lv: str) -> dict:
+    stem = f"milp_effect_time{'_' + bench if bench != 'census' else ''}_L{lv}.json"
+    p = ROOT / "results" / stem
     return json.loads(p.read_text())
 
 
-def main(out: Path) -> None:
-    data = {lv: load_lv(lv) for lv in ("0", "1")}
+def baseline_metrics(bench: str) -> dict:
+    """Exact per-level baseline (no extended stats) mean/geo/max from the corpus."""
+    import glob
+    pat = (ROOT / "results" / "per_lambda" / bench / "postgres" / "*.json")
+    files = sorted(glob.glob(str(pat)))
+    vals = {"0": [], "1": []}
+    for f in files:
+        if Path(f).name == "_meta.json":
+            continue
+        d = json.loads(Path(f).read_text())
+        for lk in ("0", "1"):
+            L = d.get("by_lambda", {}).get(lk)
+            if L is not None:
+                q = L["baseline"]["qerror"]
+                if q == q:
+                    vals[lk].append(q)
+    out = {}
+    for lk, x in vals.items():
+        n = len(x)
+        out[lk] = {
+            "mean": sum(x) / n,
+            "geo": math.exp(sum(math.log(max(v, 1e-12)) for v in x) / n),
+            "max": max(x),
+        }
+    return out
+
+
+def main(bench: str, out: Path) -> None:
+    data = {lv: load_lv(bench, lv) for lv in ("0", "1")}
     fig, axes = plt.subplots(2, 2, figsize=(11, 8))
 
     # Baseline (no extended stats) reference metric per level, computed from corpus.
-    baseline = _baseline_metrics()  # {lv: {"mean","geo","max"}}
+    baseline = baseline_metrics(bench)  # {lv: {"mean","geo","max"}}
     fig.suptitle(
-        "Phase-2 MILP: storage budget vs. quality & solve time\n"
-        "dense-11-param census, 468 queries, only skip_worse_than_baseline pruning\n"
-        "dashed lines = no-ext single-column baseline per λ; L0/L1 baselines coincide "
+        f"Phase-2 MILP: storage budget vs. quality & solve time  ({bench})\n"
+        "only skip_worse_than_baseline pruning\n"
+        "dashed lines = no-ext single-column baseline per λ; L0/L1 baselines "
         f"(mean {baseline['0']['mean']:.2f}/{baseline['1']['mean']:.2f}, "
         f"geo {baseline['0']['geo']:.2f}/{baseline['1']['geo']:.2f}, "
         f"max {baseline['0']['max']:.0f}/{baseline['1']['max']:.0f})\n"
@@ -109,30 +137,15 @@ def main(out: Path) -> None:
     print(f"wrote {out}")
 
 
-def _baseline_metrics() -> dict:
-    """Exact per-level baseline (no extended stats) mean/geo/max from the corpus."""
-    import glob
-    files = sorted(glob.glob(str(ROOT / "results" / "per_lambda" / "census" / "postgres" / "query.*.json")))
-    vals = {"0": [], "1": []}
-    for f in files:
-        d = json.loads(Path(f).read_text())
-        for lk in ("0", "1"):
-            L = d.get("by_lambda", {}).get(lk)
-            if L is not None:
-                vals[lk].append(L["baseline"]["qerror"])
-    out = {}
-    for lk, x in vals.items():
-        n = len(x)
-        out[lk] = {
-            "mean": sum(x) / n,
-            "geo": math.exp(sum(math.log(max(v, 1e-12)) for v in x) / n),
-            "max": max(x),
-        }
-    return out
-
-
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(DEFAULT_OUT))
+    ap.add_argument("--bench", default="census",
+                    help="workload basename; also selects data file prefix and "
+                         "per_lambda corpus for baseline refs (census|dmv)")
+    ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    main(Path(a.out))
+    default_out = (ROOT / "results" / "figures" /
+                   (f"milp_effect_time_{a.bench}.png"
+                    if a.bench != "census" else "milp_effect_time.png"))
+    out = Path(a.out) if a.out else default_out
+    main(a.bench, out)
