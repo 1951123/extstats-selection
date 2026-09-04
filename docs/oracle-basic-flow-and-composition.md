@@ -20,9 +20,13 @@
 
 ## 1. 测量与优化：走通
 
-- 测量：Oracle 无 Protocol-M（`has_protocol_m()==False`），用 Protocol-A（列组 `DBMS_STATS`）。
-  `scratch/measure_census_oracle_l0.py`（resumable）在 L0 串行测全量 census；当前已在
-  `results/per_lambda/census_mini/oracle`（3-query: query.184/61/62, levels 0&1, param `<={S_rows/300}`）
+> **范围决策（2026-09-04）**：Oracle 测量当前**只用串行 + Protocol-A**——不加并行、也没有 Protocol-M。
+> - 引擎侧：Oracle 无 Protocol-M（`has_protocol_m()==False`），只能 Protocol-A（每次一个列组 GATHER）。
+> - 并行侧：不作弊并行。同实例多连接并发反而更慢（实测 2-worker ~0.32×）；复制容器方案会**易 OOM**
+>   （宿主机 15GB、每份 Oracle ~4GB，只够 ~2–3 份）。故维持**单连接、可续跑串行**（见 §6 附录）。
+
+- 测量：`scratch/measure_census_oracle_l0.py`（resumable）在 L0 串行测全量 census（Protocol-A, L0 = 1% scan）；
+  当前已在 `results/per_lambda/census_mini/oracle`（3-query: query.184/61/62, levels 0&1, param `<=S_rows/300`）
   有一个可复用的最小语料。
 - 优化：`e2e_deploy_oracle.py` 读该语料 → `build_inner_at_level` → `solve_ilp(cap=1, budget)`，
   选出 7 个 `(colset@64)`，pred mean ≈ 1.88（基线 ~2400）。→ 优化器在 Oracle 侧无碍。
