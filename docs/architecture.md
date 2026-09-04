@@ -130,6 +130,20 @@ $$
 >   目标非线性化，属独立工作）；cap=1 是否足够按 bench 量化其失效（如 DMV 的
 >   残余不可修样本），而非当作性质默认成立。详细取舍见 repo memory「续16」。
 
+> **〔修订 2026-09-04 · 最终叙述〕"one-stat sufficiency" 降级为**可选/投影**的分析
+> 观察，不再当作普适经验性质或论文主张。** 理由：DMV 已证明它不是普遍成立
+> （大量坏尾需 ≥3 列或更高 arity，single 2-col cap=1 修不到 → one-stat not
+> sufficient on DMV）。因此：
+> - 论文不再以"one-stat sufficiency（每查询单统计即足、普适）"作为结论性叙事；
+> - 保留且作为主数字的，是**限定语义下的可达上界**：在给定
+>   **(NG planner(一条合取每次只用 ≤1 MV统计) ∧ arity-2 候选 ∧ cap=1 部署)** 这一
+>   投影下，各 bench(如 census ~全修、DMV ~240/1924 不修)能到达的 q-error/floor——
+>   即明确"该投影下的结果",而非宣称全谱可达或 oracle 可达；
+> - "单统计往往捕获大多数坏尾(census/stats_CEB)"仅作**bench/数据相关的现象描述**，
+>   并配 DMV 作为反例边界(the boundary of the phenomenon)，不作为理论结论。
+> 这样把"投影受限的可达上界"设为报告口径，把 one-stat 从主张降为可选的剧情观察，
+> 与 DMV 证据、per_query_cap 可选档的模型分层一致。
+
 ### 1.6 模型与真值的差距：为什么需要端到端验证
 
 由于 query-level 模型估计的是"若独立性成立则 workload 表现"，一旦独立性
