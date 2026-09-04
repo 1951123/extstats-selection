@@ -152,6 +152,10 @@ $$
   明确"模型可信区"的边界，并让剪枝约束与其对齐。
 - **[O3] 验证阶段不可省略。** 模型的最优 ≠ 真值的最优；端到端/mask-vs-true 验证
   是 v2 的必要阶段，而非可选。
+  - **结果落地**：PG 端的端到端核查与"OID-order 修复（PG 专用扩展层）"见
+    [`e2e-deployment-interference-results.md`](e2e-deployment-interference-results.md)；
+    该 note 量化了 planner-interference gap，并给出四策略（naive / topo / FB-order /
+    Option-A）全 468-query 真部署对照与图。
 
 ### 1.8 对 v2 分层的直接含义
 
