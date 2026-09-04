@@ -18,6 +18,7 @@ from ..core.queries import BenchQuery
 from .census import load_census
 from .stats_ceb import load_stats_ceb
 from .stats_ceb_single import load_stats_ceb_single
+from .dmv import load_dmv
 
 #: Canonical benchmark names -> (loader, subdirectory under ``benchmarks/`` that
 #: holds the query files).  stats_ceb and stats_ceb_single share one directory.
@@ -25,6 +26,7 @@ _LOADERS: dict[str, tuple[Callable[[Path], list[BenchQuery]], str]] = {
     "census": (load_census, "Census"),
     "stats_ceb": (load_stats_ceb, "stats_CEB"),
     "stats_ceb_single": (load_stats_ceb_single, "stats_CEB"),
+    "dmv": (load_dmv, "DMV"),
 }
 
 
@@ -62,6 +64,7 @@ __all__ = [
     "load_census",
     "load_stats_ceb",
     "load_stats_ceb_single",
+    "load_dmv",
     "supported_benches",
     "queries_dir_for",
 ]
