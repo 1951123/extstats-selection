@@ -34,14 +34,14 @@ DEFAULT_OUT = ROOT / "results" / "milp_effect_time.json"
 REPEATS = 3   # solve repeats per budget: median timing, first result used for metrics
 
 
-def go(level, budgets, corpus, out):
-    meta, blocks = load_lambda_problem(corpus, "census", "postgres")
+def go(level, budgets, corpus, out, bench="census"):
+    meta, blocks = load_lambda_problem(corpus, bench, "postgres")
     # restrict to the λ being tested; build problem once
     phys, opts, qbases = build_inner_at_level(blocks, str(level), skip_worse_than_baseline=True)
     qbases = np.asarray(qbases, dtype=float)
     baseline_mean = float(np.mean(qbases))
     n_opt = sum(len(o) for o in opts)
-    print(f"λ L{level}: n_query={len(qbases)} n_phys_stats(full)={len(phys)} "
+    print(f"bench={bench} λ L{level}: n_query={len(qbases)} n_phys_stats(full)={len(phys)} "
           f"n_options(post skip_worse)={n_opt} baseline_mean_q={baseline_mean:.4f}")
 
     rows = []
@@ -83,7 +83,7 @@ def go(level, budgets, corpus, out):
               f"max={row['max_per_query_after']:.2f} n_sel={row['n_selected']:>3} "
               f"bytes={row['total_bytes']:>7} unrepaired={n_unrepaired:>3} "
               f"solve={dt_ms:7.1f}ms")
-    out.write_text(json.dumps({"level": level, "rows": rows}, indent=2))
+    out.write_text(json.dumps({"bench": bench, "level": level, "rows": rows}, indent=2))
     print(f"wrote {out}")
 
 
@@ -91,8 +91,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--level", type=int, default=1)
     ap.add_argument("--budgets", default="5000,20000,50000,100000,200000,400000")
+    ap.add_argument("--bench", default="census")
     ap.add_argument("--corpus", default=str(DEFAULT_CORPUS))
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     a = ap.parse_args()
     budgets = [int(x) for x in a.budgets.split(",") if x.strip()]
-    go(a.level, budgets, Path(a.corpus), Path(a.out))
+    go(a.level, budgets, Path(a.corpus), Path(a.out), a.bench)

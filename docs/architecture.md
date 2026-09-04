@@ -156,6 +156,10 @@ $$
     [`e2e-deployment-interference-results.md`](e2e-deployment-interference-results.md)；
     该 note 量化了 planner-interference gap，并给出四策略（naive / topo / FB-order /
     Option-A）全 468-query 真部署对照与图。
+  - **单表 ext-stat 的收益边界**：把单表子计划选出的扩展统计迁移到多表 join
+    workload（stats_CEB，145 joins）几乎不改 join 计划（结构仅 8/143 变、方向不佳）——
+    stats_CEB 的误差主源是 join（跨表 join selectivity），非基表选择谓词。归因与
+    边界见 [`migration-boundary-experiment.md`](migration-boundary-experiment.md)。
 
 ### 1.8 对 v2 分层的直接含义
 
