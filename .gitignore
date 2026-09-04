@@ -32,6 +32,10 @@ coverage.xml
 *.swp
 *.swo
 
+# --- External reference material (downloaded papers/datasheets, not repo
+# assets; keep a curated index/notes under docs/ if needed) ---
+references/
+
 # --- Benchmark data (large third-party payloads; keep schema/*.sql) ---
 benchmarks/*/data/*.csv
 benchmarks/*/data/*.tgz
