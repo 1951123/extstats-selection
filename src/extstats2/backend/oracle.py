@@ -269,14 +269,20 @@ class OracleBackend(Backend):
         ep, _ = self._native(Capacity(level))
         return float(ep)
 
-    # Oracle's representation grid: engine-faithful operating points, NOT the
-    # PG scalar ``attstattarget`` list. Verified (2026-09-03, q.184 driver pair):
-    # ``SIZE`` is a HARD per-object upper cap; sub-natural buckets sit on a qerr
-    # cliff and >~254 adds nothing for column groups (>=~10000 is an illegal
-    # method_opt literal, ORA-20000). A tiny grid {64, 254} spans "a real
-    # low-resolution threshold" and "let the engine choose freely"; 254 is the
-    # classic column-group bucket headroom so most objects plateau there.
-    _PARAM_TIERS: tuple[int, ...] = (64, 254)
+    # Oracle's representation grid: a SINGLE engine-faithful operating point,
+    # NOT a PG-style multi-point ``attstattarget`` menu. Unlike PostgreSQL,
+    # Oracle exposes no per-object capacity knob comparable to
+    # ``statistics_target``: histogram resolution is decided by the engine
+    # itself (``SIZE AUTO`` / converged-to-natural buckets), and ``SIZE`` only
+    # upper-bounds that. We verified (2026-09-05, Census L0) that requesting
+    # SIZE 64 vs SIZE 254 collapses to ~the same realized few-dozen buckets,
+    # i.e. there is no meaningful user-controlled resolution axis to grid
+    # over. So the grid is a single point ``254`` = "let the engine choose
+    # freely" (Oracle's classic column-group bucket headroom; >=~10000 is an
+    # illegal method_opt literal ORA-20000). The generic measurement/optimizer
+    # ``candidates x params`` layer is unchanged; this just makes Oracle
+    # effectively ``|params| = 1`` per candidate.
+    _PARAM_TIERS: tuple[int, ...] = (254,)
     #: max legal ``SIZE`` literal (Oracle rejects >= 10000 in method_opt).
     _MAX_PARAM: int = 1000
 
