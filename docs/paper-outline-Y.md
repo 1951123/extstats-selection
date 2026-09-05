@@ -64,6 +64,19 @@
 ---
 ## §4. Optimization:What + (per-engine)How-Much(MILP;贡献 1+2)
 - 通用问题:存预算 C 下选 {colset} 使每查询 error 最小;`y_s`/`x_is`;约束:storage、service、cap。
+- **how-much 分两面(正交)** —— 严谨表述,别把"MILP 决定/non 自动"混为一谈:
+  1) **表示分辨率(param/桶数)**:单统计刻画多细。
+     - PG:`statistics_target` 是 per-object 旋钮 → 网格搜+实测,MILP 按容量级排他给每 (colset)
+       选一个 param 档(= 可优化决策轴,即 v1 的 what+how-much)。
+     - Oracle:`SIZE AUTO`/NDV 收敛;SIZE64 vs 254 实测同样桶 → **无 per-object 可调轴,引擎自决**,
+       单点(254/AUTO)。
+  2) **采样深度(λ)**:扫多深(成本 + fidelity)。
+     - PG:绑在 target(S=300·target),与面 1 同轴。
+     - Oracle:`estimate_percent` 是**整表一次**共享 GATHER 的采样旋钮 —— **仍是我们选**(本工作取
+       L0-only),影响有限桶的 fidelity(λ_q),不改变桶数;**不是引擎自动**,且无 per-object 采样
+       (Oracle 粒度粗:整表一次而非 per-object)。
+  ⟹ 精确口径:表示分辨率 = **PG 可优化(MILP)/ Oracle 引擎决定**;采样 λ = **两引擎都要选**的决策
+    (Oracle 更粗)。这句进 abstract/contribution,避免评审把"Oracle 无 how-much"读过头。
 - model class 按引擎:
   - cap=1(线性,PG-自然):经验上 PG "每合取 ≤1 MV";DMV 显示其**可达上界与失效边界**。
   - cap=None(乘法/列不相交,Oracle-自然):查询内列不相交多选;Oracle 实测组合可达 ~truth。
@@ -97,7 +110,7 @@
 ## §9. Discussion / Open
 - Oracle 高 NDV 组合深 λ 是否 auto 更细(未测)→ 预留开点。
 - cap 放开到 K 的整体建模(目标非线性)独立工作。
-- 跨引擎 param 不对称 ⇒ "per-query how-much 是 DBMS 特定"。
+- 跨引擎 how-much(表示分辨率)是 DBMS 特定:PG 可优化、Oracle 引擎决定;采样 λ 两引擎都要选。
 
 ---
 ## Experiments Gating(落 outline 节前需补):
