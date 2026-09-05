@@ -63,10 +63,20 @@ _KIND_DATA_TYPE = {
 _SELECT_COUNT_RE = re.compile(r"(?is)^\s*SELECT\s+COUNT\(\*\)\s+")
 
 # Default capacity ladder: abstract level index -> statistics_target.
+#
+# 2026-09-05 S-grid policy: lambda tiers are defined by SAMPLE ROWS S, not by a
+# DBMS-native knob. The global S_rows grid is [30000, 300000]; PG realizes S via
+# statistics_target = S/300, so the ladder is target {100, 1000} <-> S {30000,
+# 300000}. Sampling saturates at the table row count N (min(300*target, N)), which
+# makes the realized per-table points follow the S-grid cases automatically:
+#   N < 30000               -> both levels collapse to full N  (1 distinct point)
+#   30000 <= N < 300000     -> L0=30000 partial, L1=full N     ({30000, full})
+#   N >= 300000             -> L0=30000, L1=300000            ({30000, 300000})
+# The former L2 target 10000 (S up to 3M) is dropped: its S exceeds the S-grid
+# 300000 cap and is never realized on any table.
 DEFAULT_CAPACITY_LADDER = {
     0: 100,
     1: 1000,
-    2: 10000,
 }
 
 # Key PostgreSQL uses for a plan node's estimated row count in EXPLAIN JSON.
@@ -434,7 +444,7 @@ class PostgresBackend(Backend):
         Resolves each statistic's column set from ``pg_statistic_ext.stxkeys``
         (int2vector of attribute numbers) via ``pg_attribute``.
         """
-        table_base = _clean_table(table).rpartition(".")[2]
+        table_base = _relname(table)
         with self.conn.cursor() as cur:
             cur.execute(
                 """
@@ -447,7 +457,7 @@ class PostgresBackend(Backend):
                     JOIN pg_attribute att
                       ON att.attrelid = s.stxrelid AND att.attnum = k.attnum
                 ) a ON true
-                WHERE c.relname = %s
+                WHERE c.relname = lower(%s)
                 """,
                 (table_base,),
             )
@@ -531,12 +541,12 @@ class PostgresBackend(Backend):
     # ---- single-column target control ----------------------------------
     def _regular_columns(self, table: str) -> list[str]:
         """Names of ``table``'s regular (non-system) columns (dotted '.' ok)."""
-        base = _clean_table(table).rpartition(".")[2]
+        base = _relname(table)
         with self.conn.cursor() as cur:
             cur.execute(
                 "SELECT a.attname FROM pg_attribute a "
                 "JOIN pg_class c ON c.oid = a.attrelid "
-                "WHERE c.relname = %s AND a.attnum > 0 AND NOT a.attisdropped "
+                "WHERE c.relname = lower(%s) AND a.attnum > 0 AND NOT a.attisdropped "
                 "AND a.attidentity = '' AND a.attgenerated = ''",
                 (base,))
             return [r[0] for r in cur.fetchall()]
@@ -565,7 +575,7 @@ class PostgresBackend(Backend):
         """Pin every regular column to ``_SINGLE_COL_STATISTICS_TARGET`` (100),
         per (connection, table), cached (legacy 100-pin; kept for back-compat).
         Does NOT ANALYZE — callers ANALYZE when they build."""
-        base = _clean_table(table).rpartition(".")[2]
+        base = _relname(table)
         if base in self._pinned_single:
             return
         self._set_all_columns_target(
@@ -574,13 +584,13 @@ class PostgresBackend(Backend):
 
     def _reltuples(self, table: str) -> float:
         """Estimated row count of ``table`` from pg_class (lazily cached)."""
-        base = _clean_table(table).rpartition(".")[2]
+        base = _relname(table)
         cached = self._RELTUPLES_CACHE.get(base)
         if cached is not None:
             return cached
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT c.reltuples FROM pg_class c WHERE c.relname = %s",
+                "SELECT c.reltuples FROM pg_class c WHERE c.relname = lower(%s)",
                 (base,),
             )
             row = cur.fetchone()
@@ -682,8 +692,14 @@ class PostgresBackend(Backend):
         params above the λ's admissible depth; the optimizer then dominance-prunes
         plateau-synonymous / dominated params per (query, colset, λ) at solve time.
         Coverage spans low-cardinality (census climate: saturates <= ~50-100) up to
-        high-cardinality (stats_CEB: needs 1000+), so the same grid serves both."""
-        return (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000)
+        high-cardinality (stats_CEB: needs 1000), so the same grid serves both.
+
+        UPPER BOUND (2026-09-05, S-grid policy): the global S_rows grid caps the
+        max sampling depth at S_max = 300_000 rows, so the max meaningful
+        ``statistics_target`` is ``S_max/300 = 1000``. A param > 1000 would require
+        S = 300·param > 300 000 rows, which the S-grid never realizes on any table —
+        so tiers above 1000 (2500/5000/10000) are dropped from the grid."""
+        return (5, 10, 25, 50, 100, 250, 500, 1000)
 
     def max_param_at_level(self, table: str, level: int) -> Optional[float]:
         """Lattice cap ``S_level/300`` = the λ single-column handle (PG)."""
@@ -720,6 +736,17 @@ class PostgresBackend(Backend):
 def _clean_table(table: str) -> str:
     """Strip a leading dot from a table name (v1 keys are ``.table``)."""
     return table.lstrip(".") or table
+
+
+def _relname(table: str) -> str:
+    """The PostgreSQL relation name PG actually sees for a bench table key.
+
+    Unquoted identifiers fold to lowercase in PG (``FROM postHistory`` resolves
+    to ``posthistory``), so metadata/catalog lookups by ``pg_class.relname`` must
+    likewise match the lowercased table key (bench keys may be camelCase, e.g.
+    ``.postHistory``). Used only for catalog reads; DDL/SQL keep the caller's
+    spelling because PG case-folds it identically."""
+    return _clean_table(table).rpartition(".")[2].lower()
 
 
 def _rewrite_count_to_select(sql: str) -> str:

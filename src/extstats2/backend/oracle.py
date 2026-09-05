@@ -47,6 +47,38 @@ from ..core.queries import BenchQuery
 # Leading ``SELECT COUNT(*)`` (case-insensitive) — same rewrite as the PG backend.
 _SELECT_COUNT_RE = re.compile(r"(?is)^\s*SELECT\s+COUNT\(\*\)\s+")
 
+# PG-column -> Oracle-column renames required by an Oracle Table whose load had to
+# avoid a bare Oracle reserved word. The v2 benchmark SQL is written against the
+# PostgreSQL schema (e.g. `badges.Date`); when the table was loaded into Oracle a
+# reserved-word column was renamed (benchmark load renamed `badges.Date` -> CDATE).
+# These are applied to the *transpiled* SQL so every reference to the PG column on
+# that table is rewritten to the real Oracle column. NOTE (2026-09-05): only stats_CEB
+# `badges` hits this; the map is table-keyed and intentionally small. Oracle compares
+# unquoted/uppercase, so we only rewrite the exact reserved-word identifier.
+# mapping keyed by lower table name -> {pg_col: oracle_col}
+_RESERVED_COL_RENAME = {
+    "badges": {"date": "cdate"},
+}
+
+
+def _rewrite_reserved_columns(table: str, sql: str) -> str:
+    """Rewrite a transpiled Oracle query's references to a table's PG reserved-word
+    columns to their actual Oracle column names. ``sql`` is the Oracle-dialect SQL
+    (table alias already stripped of ``AS`` by sqlglot, e.g. ``FROM badges b``)."""
+    ren = _RESERVED_COL_RENAME.get(table.lower())
+    if not ren:
+        return sql
+    out = sql
+    for pg_col, or_col in ren.items():
+        # rewrite `<col>` used where the qualified source column is the reserved word;
+        # benchmarks reference it via the table's alias, but be permissive (qualified
+        # alias or bare word bounded by non-identifier chars).
+        out = re.sub(
+            rf"\b({pg_col})\b(?![A-Za-z0-9_])", or_col, out,
+            flags=re.IGNORECASE,
+        )
+    return out
+
 _CAPABILITIES = [
     # dependency: not implemented in the first cut.
     Capability("dependency", "none", "n/a", supported=False),
@@ -57,12 +89,20 @@ _CAPABILITIES = [
 ]
 
 
-# Abstract level index -> (estimate_percent, buckets). Column groups share one
-# GATHER scan; the sampling knob (estimate_percent) is the per-scan capacity.
+# Abstract level index -> {"s_rows": S-target, "buckets": n}. 2026-09-05 S-grid:
+# lambda tiers are defined by SAMPLE ROWS S (dataset-bound), not by a DBMS %
+# knob. Global S_rows grid = [30000, 300000]; Oracle realizes S via
+#   estimate_percent = 100 * min(S, N) / N
+# (per table N), which mirrors PostgreSQL's S = min(300*target, N) so the two
+# engines realize the SAME per-table S points:
+#   N < 30000            -> both tiers full N        (1 distinct point)
+#   30000 <= N < 300000  -> L0=30000 partial / L1=full N    ({30000, full})
+#   N >= 300000          -> L0=30000 / L1=300000            ({30000, 300000})
+# Column groups share one GATHER scan; the sampling knob (estimate_percent) is
+# the per-scan capacity. The former fixed-% ladder (1/10/100) is dropped.
 DEFAULT_CAPACITY_LADDER = {
-    0: {"estimate_percent": 1, "buckets": 254},
-    1: {"estimate_percent": 10, "buckets": 254},
-    2: {"estimate_percent": 100, "buckets": 254},
+    0: {"s_rows": 30000, "buckets": 254},
+    1: {"s_rows": 300000, "buckets": 254},
 }
 
 # FIXED per-table gather cost (one shared scan), seconds, indexed by tier.
@@ -135,13 +175,41 @@ class OracleBackend(Backend):
         return "(" + ",".join('"%s"' % c for c in cols) + ")"
 
     def _native(self, capacity: Capacity) -> tuple[float, int]:
-        """Map an abstract capacity level -> (estimate_percent, buckets)."""
-        lvl = capacity.level
-        if lvl not in self._ladder:
-            raise KeyError(
-                f"capacity level {lvl!r} not in ladder {list(self._ladder)}")
-        params = self._ladder[lvl]
-        return float(params["estimate_percent"]), int(params.get("buckets", 254))
+        """Convenience: realized ``(estimate_percent, buckets)`` for an abstract
+        capacity *without a table* — falls back to treating the level as a full
+        scan (100%). Prefer :meth:`_percent_for` when the table is known."""
+        return self._percent_for(None, capacity.level), self._buckets(capacity.level)
+
+    def _s_rows_target(self, level: int) -> float:
+        """The S_rows (sample-rows) target of λ-tier ``level`` from the S-grid."""
+        if level not in self._ladder:
+            raise KeyError(f"capacity level {level!r} not in ladder "
+                           f"{list(self._ladder)}")
+        params = self._ladder[level]
+        if "s_rows" in params:
+            return float(params["s_rows"])
+        # legacy ladder stored estimate_percent (fixed %); convert at N=100 rows
+        # keeps old callers working, but S-grid ladders store s_rows.
+        return float(params["estimate_percent"])
+
+    def _buckets(self, level: int) -> int:
+        params = self._ladder.get(level, {})
+        return int(params.get("buckets", 254))
+
+    def _percent_for(self, table: Optional[str], level: int) -> float:
+        """Realized Oracle ``estimate_percent`` for the S-grid tier ``level`` on
+        ``table``: ``100 * min(S, N) / N`` (mirrors PG ``S=min(300*target,N)``).
+
+        - N <= S   -> full scan (100%), the {full} / case-2-L1 points;
+        - N >  S   -> partial ``%`` that samples the requested S rows.
+        Unknown N/table falls back to full scan (100%), which is the safe
+        engine-faithful depth (AUTO_SAMPLE_SIZE = full for these sizes).
+        """
+        S = self._s_rows_target(level)
+        n = self._num_rows(table) if table else 0.0
+        if n is None or n <= 0:
+            return 100.0
+        return min(100.0, 100.0 * min(S, n) / n)
 
     # -- metadata ----------------------------------------------------------
 
@@ -207,12 +275,15 @@ class OracleBackend(Backend):
         """
         if not objs:
             return
-        ep, buckets = self._native(capacity)
         by_table: dict[str, list[StatObject]] = {}
         for o in objs:
             by_table.setdefault(o.table, []).append(o)
         for table, objs_on in by_table.items():
             tname = self._q_table(table)
+            # S-grid: the sampling depth is the S_rows target realizing min(S,N)
+            # rows on *this* table, so estimate_percent is per-table.
+            ep = self._percent_for(table, capacity.level)
+            buckets = self._buckets(capacity.level)
             # Keep the engine's natural per-column statistics (SIZE AUTO builds
             # histograms for skewed columns) and add a histogram only on the
             # requested column groups. This matches how a real deployment would
@@ -264,10 +335,10 @@ class OracleBackend(Backend):
         return self.sample_rows_per_level(table, level)
 
     def lambda_sampling_percent(self, table: str, level: int) -> Optional[float]:
-        """Oracle's native ``estimate_percent`` that realizes λ at ``level``
-        (1/10/100 = the ladder's sampling knob)."""
-        ep, _ = self._native(Capacity(level))
-        return float(ep)
+        """Oracle's native ``estimate_percent`` that realizes λ-tier ``level`` on
+        ``table`` under the S-grid = ``100*min(S,N)/N`` (per-table, not a fixed
+        %; mirrors PG's S realization)."""
+        return float(self._percent_for(table, level))
 
     # Oracle's representation grid: a SINGLE engine-faithful operating point,
     # NOT a PG-style multi-point ``attstattarget`` menu. Unlike PostgreSQL,
@@ -316,16 +387,17 @@ class OracleBackend(Backend):
 
     def enter_lambda_state(self, table: str, level: int) -> None:
         """Realize λ-tier ``level``: one single-column-only GATHER at that λ's
-        ``estimate_percent`` (SIZE AUTO — natural single-col histograms), no column
-        group. After this, ``estimate`` = the no-ext per-λ baseline ``e^0(S)``."""
-        ep, _ = self._native(Capacity(level))
+        realized estimate_percent for ``table`` (SIZE AUTO — natural single-col
+        histograms), no column group. After this, ``estimate`` = the no-ext
+        per-λ baseline ``e^0(S)``."""
+        ep = self._percent_for(table, level)
         self.restore_natural_stats(table, estimate_percent=ep)
 
     def build_stat_param(self, obj: StatObject, param: int) -> None:
         """Build one column group at an explicit ``param`` buckets, at the current
-        λ's estimate_percent (the λ-state scan depth). Decouples the object's
-        bucket count from the level ladder, matching the λ-first model."""
-        ep, _ = self._native(obj.capacity)          # this λ's scan %
+        λ's realized estimate_percent for the object's table (S-grid scan depth).
+        Decouples the object's bucket count from the level ladder."""
+        ep = self._percent_for(obj.table, obj.capacity.level)  # this λ's scan %
         group = "(" + ",".join(self._q_cols(obj.columns)) + ")"
         mo = (f"FOR ALL COLUMNS SIZE AUTO FOR COLUMNS {group} SIZE {int(param)}")
         tname = self._q_table(obj.table)
@@ -512,20 +584,21 @@ class OracleBackend(Backend):
         return _VAR_PER_STAT_S
 
     def sample_rows_per_level(self, table: str, level: int) -> Optional[float]:
-        """Expected GATHER sample rows at a capacity tier.
+        """Expected SAMPLE rows at an S-grid capacity tier on ``table``.
 
-        Oracle samples ``estimate_percent/100`` of the table's rows per scan. The
-        whole table shares one scan (per_scan capacity model), so this is the
-        sampling the column-group statistic sees at ``level``.
+        = ``min(S_target, N)``: the S_rows target (30000 / 300000) saturated at
+        the table's row count N — mirrors PostgreSQL's ``S=min(300*target,N)``,
+        so both engines realize the same per-table S points. (Oracle then *tries*
+        to sample this many rows; block-granularity may make the recorded sample
+        overshoot on small tables, which is reported via SAMPLE_SIZE.)
         """
         if level not in self._ladder:
             return None
-        params = self._ladder[level]
-        ep = float(params["estimate_percent"]) / 100.0
         n = self._num_rows(table)
-        if n <= 0:
+        if n is None or n <= 0:
             return None
-        return float(ep * n)
+        S = self._s_rows_target(level)
+        return float(min(S, n))
 
     def num_rows(self, table: str) -> Optional[float]:
         n = self._num_rows(table)
@@ -617,7 +690,13 @@ def _to_oracle_dialect(sql: str) -> str:
         import sqlglot
         out = sqlglot.transpile(sql, read="postgres", write="oracle")
         if out and out[0]:
-            return out[0]
+            res = out[0]
+            # Apply reserved-word column renames for tables whose Oracle load renamed a
+            # column away from an Oracle reserved word (e.g. badges.Date -> CDATE).
+            fm = re.search(r"\bfrom\s+(\w+)\b", sql, re.I)
+            if fm:
+                res = _rewrite_reserved_columns(fm.group(1), res)
+            return res
     except Exception:
         pass
     return sql

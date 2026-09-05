@@ -45,6 +45,9 @@ benchmarks/*/data/*.gz
 
 # --- Experiment output (results are data artifacts; whitelist selectively) ---
 results/
+# Archive of pre-S-grid measurement results (old lambda-grid era; cleaned after
+# the S-grid re-measurement replaces/supersedes them — do NOT commit the 120MB tree).
+results_archive_pre_sgrid_*/
 output/
 experiments/
 
