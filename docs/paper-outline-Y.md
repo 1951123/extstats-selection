@@ -26,6 +26,16 @@
 5. **部署闭合 model-vs-truth(每引擎)**:PG OID-order(FB 排序);Oracle 合并单次 gather;
    部署协议(非逐组)是"模型预测兑现"的隐含前提。
 
+**度量定义(Objective & Metrics)——已定稿 2026-09-05:**
+- **通用(可多选/cap-free)模型的唯一主目标 = 几何平均(geo/log 空间)**:per-query 组合是乘性的
+  (各选择率相乘),算术 mean 在该处非线性 → log/geo 是被迫且正确的目标。
+- **算术平均只是 cap=1 的特例**:cap=1 单例使算术可精确线性化(`SPARSE_LINEAR`),是该档的“计算
+  便利”,非通用目标。
+- **算术平均在优化后才获得**:以 geo 求解通用问题 → decode 出部署后 per-query q-error → 事后算
+  算术 mean 作为报告量。
+- 报告口径:**geo(主)+ p90/max(尾)+ 可选事后算术**;两个 model class(cap=1/cap-free)必须在
+  **同一 geo 口径**下比较(否则如 2KB 假交叉,源自把一个输出量(算术)拿去比一个 geo 优化模型)。
+
 **体裁决定(未定,open):**
 - 改 v1 `paper/main.tex`(PG 主体、Oracle/DMV 进边界)→ 骨架 X 更稳;或
 - v2 新全文(Y 头号、Oracle 作第二引擎、DMV 作边界)。本 outline 按 **Y** 展开,但标记哪些节若走 X
