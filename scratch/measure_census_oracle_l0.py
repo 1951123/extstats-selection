@@ -103,6 +103,9 @@ def main() -> None:
                   flush=True)
 
     # ---- write _meta.json (L0-only tier + offered param grid) ------------
+    # S_rows reference table: for a multi-table bench (stats_ceb_single) there is
+    # no single table; report the default args.table as the S_rows reference and
+    # note it (per-table S_rows differ; estimate_percent=1 is common to all L0).
     meta_tiers = []
     for level in LEVELS:
         sr = be.lambda_sampling_rows(args.table, level)
@@ -112,9 +115,9 @@ def main() -> None:
     pgrid = tuple(be.representation_param_tiers(args.table))
     write_meta(dest, Meta(bench=bench, backend="oracle", tiers=meta_tiers,
                           param_tiers=pgrid,
-                          extra={"note": "full census L0 (Protocol-A, "
-                                          "colgroup); only param<=S/300 "
-                                          "offered per level"}))
+                          extra={"note": f"full {bench} L0 (Protocol-A, colgroup); "
+                                          f"single-param AUTO/254 per candidate; "
+                                          f"S_rows ref table = {args.table}"}))
     el = time.time() - t_start
     print(f"[oracle-l0] COMPLETE done={done} skipped={skipped} "
           f"failed={failed} total_elapsed={el:.0f}s ({el/60:.1f}m)", flush=True)

@@ -15,13 +15,22 @@
 2. **model-class-is-a-knob**:同一核心在不同引擎选择不同 class:
    PG 退化为 cap=1 线性档(与 PG planner ≤1 MV/conjunct 一致);Oracle 是"多不相交列组组合"
    (per-query 多 select 可行);DMV 暴露 cap=1 在重尾/极稀疏下的上界。
-3. **跨引擎 param 不对称(headline observation)**:
-   - PG:λ **约束** param(`statistics_target` 既驱动采样 S=300·θ 又是表示 cap)→ param≤S/300;有
-     **可优化、受 λ 约束的 how-much 轴**。
-   - Oracle:param ≈ **数据(NDV)的函数**,不是 λ 的函数、也不是自由旋钮;实测桶不随 λ(1/10/100% 平),
-     因瓶颈是数据 NDV;Oracle 无 how-much 决策 → 只选 what(列组)+ 每表 λ。
-   - 推论:v1/v2 把 param 当决策轴是 **PG 视角**;跨引擎时 how-much 维度是否可优化是**引擎相关**的。
-   [贡献已被本会话实证固化]
+3. **how-much:GRID = 通用方法, AUTO = 高级但 DBMS-条件性能力(头号主张,与用户定稿 2026-09-05)**:
+   - GRID = 通用/可移植 optimizer 方法(引擎无关,portability-first):枚举显式分辨率档并实测,MILP
+     按 workload+budget 分级。任何引擎都能跑,不需要引擎提供特别能力;是我们方法的可移植核心。
+     诚实的 caveat:**grid 作为"方法"通用,但它的 per-object how-much *威力* 仍引擎条件性** —— 只在
+     引擎暴露 per-object 分辨率旋钮时(PG `statistics_target`)可操作 → 这正是 grid 在 PG 最能发力
+     的原因(不是 grid 属于 PG)。
+   - AUTO = 高级但 DBMS-条件性能力层(引擎提供才可用:Oracle AUTO_SAMPLE_SIZE/自适应统计):可用时
+     常优于自跑 grid —— 引擎有内建数据访问、低成本自适应决定 how-much。**不是与 grid 对等的阵营**,
+     而是"引擎如提供则优先用"的高级许可证。
+   - 关系(非两对等阵营的取舍):AUTO = 引擎给的"高级能力";GRID = 通用/回退方法(无 auto 的引擎、
+     或需 auto 没有的逐对象 workload 控制时用)。PG 显示 grid 不只是"回退":PG 的 per-object 旋钮
+     处正是 grid 最强大、auto 无法取代的工作负载敏感层。
+   - 推论:v1/v2 把 param 当决策轴是 **PG 视角**(PG 恰好暴露了旋钮),但跨引擎时 grid 是**通用算法**、
+     auto 是**可用则启用的 native accelerator**。论文研究 = "何时把 how-much 委派给引擎 AUTO、何时
+     用通用 grid 自控",而非引擎优劣。
+   [修正(2026-09-05):AUTO 探针(all 3 bench,AUTO=满扫)后 → Oracle 采样深度仍手动 grid(Protocol-A\n     逐候选满扫不可行),仅表示分辨率(桶)归 AUTO;见 §0 证据债/§4。]
 4. **测量筑基(Protocol-M/A)**:逐候选、逐档隔离测量使 what×how-much 可测;跨引擎。
 5. **部署闭合 model-vs-truth(每引擎)**:PG OID-order(FB 排序);Oracle 合并单次 gather;
    部署协议(非逐组)是"模型预测兑现"的隐含前提。
@@ -43,9 +52,15 @@
 
 **证据债(决定 outline 里"实验"规模):**
 - PG 腿(census/stats_CEB_single/DMV)已报告级 ✓;DMV cap=1 边界 ✓(`milp_effect_time_dmv_*`)。
-- Oracle 腿 **薄**:仅 census_mini(3q)+ 5 ad-hoc + synthetic 组合;需 **full census-on-Oracle L0
-  (~1.8h 串行)+ stats_CEB_single-on-Oracle L0 + dmv-on-Oracle(L0,需先建 DMV 表)**。
-- Oracle param=单点(254/AUTO)已定;表示维塌缩 → 语料成本回到 ~1 候选-slot/每 λ(~1.8h census/份)。
+- Oracle 腿 **薄**:仅 census_mini(3q)+ 5 ad-hoc + synthetic 组合;需 **full census-on-Oracle
+  + stats_CEB_single-on-Oracle + dmv-on-Oracle(表 2026-09-05 已装到 Oracle,11.6M)**。
+- **Oracle 采样深度(estimate_percent)手动 grid(1/10/100)—— 修正 2026-09-05**:AUTO 探针证实
+  Oracle AUTO_SAMPLE_SIZE 在我们所有表(含 11.6M DMV)都=满扫(100%),无自动部分档。而 Protocol-A
+  (无 catalog-mask/M)下必须对**每个两列候选单独 gather 实测**其 fidelity;满扫每候选皆不可行。
+  ⟹ Oracle 必须保留 estimate_percent 的**手动档 grid**(既有 ladder 1/10/100)以给 candidate 一个
+  廉价部分扫测量点,再让 MILP 在价格(fidelity per scan 档)下选;这是**测量协议成本驱动**,不是"部分
+  采样是正确部署口径"。仅 per-object 表示分辨率(桶/SIZE)仍引擎自决(NDV,单点 254,免费随同一 gather
+  决定,不额外花候选测量成本)。AUTO 只用于 natural baseline/部署默认,不用于逐候选 fidelity 扫描。
 
 ---
 ## §1. Introduction(略;含 §0 贡献+一句式贴位)
@@ -60,33 +75,36 @@
   |---|---|---|
   | param 是什么 | attstattarget(每对象标量旋钮) | SIZE buckets = 数据 NDV 收敛的上界(非独立旋钮) |
   | λ↔param 关系 | 硬耦合 param≤S/300(statistics_target 两者皆是) | 无耦合;param=f(数据 NDV),λ 不变桶 |
-  | how-much 轴可优化? | 是(cap/分辨率是可调决策) | 否(引擎按 NDV 渲染) |
-  | λ 对对象的实效 | 限制 param + 决定每次 ANALYZE 深度 | 决定采样深度→影响有限桶的 fidelity(λ_q),非桶数 |
+  | how-much(采样深度 λ)决策面 | grid:λ 档 + per-object 分辨率旋钮都可查 | 手动 grid estimate_percent(1/10/100):AUTO=满扫不可行,须廉价部分扫测量候选 |
+  | how-much(表示分辨率/桶)决策面 | 同 statistics_target(与 λ 耦合) | 引擎自决(NDV 渲染,单点 254),免费且不加测量成本 |
+  | how-much 谁在管 | 我们(MILP 分层) | 采样档我们选(grid);桶数引擎定 |
 - evidence:PG 机制(cite analyze.c minrows)；Oracle 实测桶 16/15/17、35/35/36 (1/10/100%)。
 
 ---
 ## §3. Measurement:Protocol-M/PG 与 Protocol-A/Oracle(贡献 4)
 - 问题:what×how-much 逐候选逐档不可测(宽表几十万候选)。
 - Protocol-M(PG):单 ANALYZE + catalog-mask 逐候选隔离;精度≈singleton;测量才是瓶颈叙事。
-- Protocol-A(Oracle):逐候选 GATHER;无 mask;诚实成本更高 → scope:Oracle 只在 L0 + 单点 param。
+- Protocol-A(Oracle):逐候选 GATHER;无 mask;诚实成本更高 · AUTO 探针证实 AUTO_SAMPLE_SIZE=满扫;
+  逐候选满扫不可行 → scope:Oracle 用 **estimate_percent 手动档 grid(1/10/100)** 给每候选廉价部分扫测量;
+  仅 per-object 表示(桶)引擎定。即 Oracle 仍有 λ 维度(作用于采样深度),无 per-object 分辨率维度。
 - 跨引擎协议族;每后端"如何隔离测量候选"都落到原生 handle。
 
 ---
 ## §4. Optimization:What + (per-engine)How-Much(MILP;贡献 1+2)
 - 通用问题:存预算 C 下选 {colset} 使每查询 error 最小;`y_s`/`x_is`;约束:storage、service、cap。
-- **how-much 分两面(正交)** —— 严谨表述,别把"MILP 决定/non 自动"混为一谈:
-  1) **表示分辨率(param/桶数)**:单统计刻画多细。
-     - PG:`statistics_target` 是 per-object 旋钮 → 网格搜+实测,MILP 按容量级排他给每 (colset)
-       选一个 param 档(= 可优化决策轴,即 v1 的 what+how-much)。
-     - Oracle:`SIZE AUTO`/NDV 收敛;SIZE64 vs 254 实测同样桶 → **无 per-object 可调轴,引擎自决**,
-       单点(254/AUTO)。
-  2) **采样深度(λ)**:扫多深(成本 + fidelity)。
-     - PG:绑在 target(S=300·target),与面 1 同轴。
-     - Oracle:`estimate_percent` 是**整表一次**共享 GATHER 的采样旋钮 —— **仍是我们选**(本工作取
-       L0-only),影响有限桶的 fidelity(λ_q),不改变桶数;**不是引擎自动**,且无 per-object 采样
-       (Oracle 粒度粗:整表一次而非 per-object)。
-  ⟹ 精确口径:表示分辨率 = **PG 可优化(MILP)/ Oracle 引擎决定**;采样 λ = **两引擎都要选**的决策
-    (Oracle 更粗)。这句进 abstract/contribution,避免评审把"Oracle 无 how-much"读过头。
+- **how-much 两面(修正 2026-09-05)—— 采样深度 grid 是测量必需的,表示分辨率才引擎定**:
+  1) 采样深度(estimate_percent / λ):**Oracle 也手动 grid(1/10/100)**,因为 AUTO_SAMPLE_SIZE=满扫,
+     而 Protocol-A 须逐候选真实 gather 测 fidelity,满扫每个候选不可行 ⟹ 廉价部分扫测量点是协议必需。
+     这是**测量成本驱动**(非"部分采样即正确");grid 顶档 100%=忠实的引擎满深度,AUTO 满扫只用于
+     natural baseline/部署,不用于逐候选扫描。MILP 在"每档 scan 代价 vs fidelity"间按预算选档。
+  2) 表示分辨率(桶/SIZE):**引擎自决**(NDV 渲染,单点 254;SIZE64-254 实测桶同 → 无可 grid 的 per-
+     object 旋钮),且决定它是免费的(随同一 gather 扫描发生,不另花候选测量成本)→ 保留引擎 AUTO。
+  ⟹ 精确口径(进 abstract/contribution):跨引擎**可 grid 的 how-much 轴**=(a)PG:per-object 分辨率
+    + λ 都可 grid 且耦合;(b)Oracle:表示分辨率引擎定(无旋钮),但**采样深度仍须 grid**(否则 Protocol-A
+    无法廉价测量候选)。所以 oracle 并非"how-much 全交 AUTO",而是"表示归 AUTO、采样档自 grid";
+    且两者都受同一约束:测量(Protocol-A 逐候选)是瓶颈。研究问题不变 = "何时值得为 workload-aware
+    的 how-much 付出 grid 测量成本" ,并量化 AUTO 满扫(sampling)在逐候选测量上为何不可行(full-scan
+    成本)。
 - model class 按引擎:
   - cap=1(线性,PG-自然):经验上 PG "每合取 ≤1 MV";DMV 显示其**可达上界与失效边界**。
   - cap=None(乘法/列不相交,Oracle-自然):查询内列不相交多选;Oracle 实测组合可达 ~truth。
@@ -118,13 +136,20 @@
 
 ---
 ## §9. Discussion / Open
-- Oracle 高 NDV 组合深 λ 是否 auto 更细(未测)→ 预留开点。
+- Oracle 采样深度手动 grid 修正(2026-09-05):AUTO_SAMPLE_SIZE=满扫即使 11.6M DMV 亦然(三 bench 全验证);
+  Protocol-A 逐候选满扫不可行 → Oracle 保留 estimate_percent 档 grid(1/10/100)作候选测量点。开:是否有
+  Oracle 原生的"廉价多候选共享扫"能绕开(否则满扫只用于自然 baseline/部署,不用于逐候选扫描)。
+- Oracle 高 NDV 组合、显式给更高 fidelity(非 AUTO 表示)是否更好(未测)→ 作为对照开点。
 - cap 放开到 K 的整体建模(目标非线性)独立工作。
-- 跨引擎 how-much(表示分辨率)是 DBMS 特定:PG 可优化、Oracle 引擎决定;采样 λ 两引擎都要选。
+- 跨引擎 how-much 分两层:表示分辨率 = PG 可 grid(旋钮)/Oracle 引擎自决(无旋钮,免费);采样深度 =
+  两引擎 Oracle/PG 都 grid(测量必需,Protocol 逐候选成本驱动)。开 = "何时值得 grid 测量成本" + 量化
+  AUTO 满扫在逐候选 Protocol-A 上为何不可行(full-scan × 候选数)。
 
 ---
 ## Experiments Gating(落 outline 节前需补):
-1. full census-on-Oracle L0(串行 ~1.8h;表已在;单点 param)。
-2. full stats_CEB_single-on-Oracle L0(表已在)。
-3. dmv-on-Oracle L0(需先建 DMV 表,11.6M 行)。
-若不投 Y 头号(走 X),Oracle 保持 mechanism(synthetic + 3q E2E)即可,毋须 1-3。
+1. full census-on-Oracle(既有 estimate_percent 档 grid;表已在)。
+2. full stats_CEB_single-on-Oracle(同上;表已在)。
+3. dmv-on-Oracle(DMV 表 2026-09-05 已装 Oracle 11.6M;待在其上跑)。
+4. **待决**:是否需 Oracle 全档(grid 的 L1/L2=10/100%)语料以建 price-vs-fidelity 曲线(AUTO=满扫
+   证实为 100%;若报告单档 fidelity,现有 1% 语料足够;若逐档扫描则重测更贵)。
+若不投 Y 头号(走 X),Oracle 保持 mechanism(synthetic + 3q E2E)即可,毋须 1-4。
