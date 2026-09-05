@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -69,6 +70,17 @@ def _worker(args: dict) -> int:
             skipped += 1            # candidate-bearing metric: drop 1-col/no-pred
             continue
         cands = [CandidateSet(table=table, columns=cd.columns) for cd in cands]
+        # resumable: skip if this query's file already carries all requested levels
+        qf = Path(outdir) / f"{qid}.json"
+        if qf.exists():
+            try:
+                blk = json.load(open(qf))
+                have = {int(k) for k in blk.get("by_lambda", {})}
+                if have.issuperset(set(levels)):
+                    skipped += 1
+                    continue
+            except Exception:
+                pass
         try:
             measure_query_lambda_m(be, q, cands, levels=levels,
                                    param_tiers=None, outdir=outdir)
@@ -118,14 +130,24 @@ def main() -> None:
         dbname=f"{args.dbprefix}1"))
     if not be0.supports_catalog_mask():
         print("[main] WARN: no catalog-mask on mirror1; mirrors may not exist")
-    tiers = []
-    for lv in args.levels:
-        st = be0.single_col_target_for_level(args.table, lv)
-        rows = be0.lambda_sampling_rows(args.table, lv)
-        tiers.append(LambdaTier(level=lv, S_rows=rows, single_target=st,
-                                estimate_percent=None))
+    # de-dup'd meta shape (matches scratch/measure_sgrid.py): tiers declare only
+    # the lambda LEVELS that exist; the single authoritative per-table realized S
+    # grid lives in extra.table_s_rows (PG: S_rows/single_target; estimate_percent
+    # is an Oracle-only notion -> null on PG).
+    tiers = [LambdaTier(level=lv, S_rows=None, single_target=None,
+                        estimate_percent=None) for lv in args.levels]
+    tbl = args.table
+    table_s_rows = {tbl: {str(lv): {
+        "S_rows": be0.lambda_sampling_rows(tbl, lv),
+        "single_target": be0.single_col_target_for_level(tbl, lv),
+        "estimate_percent": None} for lv in args.levels}}
     write_meta(outdir, Meta(bench=args.bench, backend="postgres", tiers=tiers,
-                            param_tiers=be0.representation_param_tiers()))
+                            param_tiers=be0.representation_param_tiers(),
+                            extra={"method": "S-grid global S_rows [30000,300000]; "
+                                             "per-owner-table realized S in table_s_rows",
+                                   "levels": list(args.levels),
+                                   "owner_tables": [tbl],
+                                   "table_s_rows": table_s_rows}))
     print(f"[main] meta written; {len(shards[1])}.. qids per mirror")
 
     tasks = []
