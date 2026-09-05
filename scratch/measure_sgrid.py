@@ -103,23 +103,15 @@ def main() -> None:
         ep = be.lambda_sampling_percent(tbl, lv)
         return {"S_rows": rows, "single_target": st, "estimate_percent": ep}
 
-    # Per-bench representative table for the global tiers summary line.
-    ref_tbl = {  # census/dmv single big table; stats_CEB uses its largest filter
-        "census": ".climate", "dmv": ".dmv", "stats_ceb_single": ".posts",
-    }[args.bench]
-    # If the ref table is not actually among owner tables (e.g. renamed), fall
-    # back to the first real owner table.
-    if ref_tbl not in owner_tables and owner_tables:
-        ref_tbl = owner_tables[0]
-    tiers = []
-    for lv in args.levels:
-        t = _tier_meta(ref_tbl, lv)
-        tiers.append(LambdaTier(level=lv, S_rows=t["S_rows"],
-                                single_target=t["single_target"],
-                                estimate_percent=t["estimate_percent"]))
-    # Full per-owner-table S map: for a multi-table bench the S_grid tier's
-    # realized S (and thus how-much) differs per owner table's N. Record it so
-    # downstream consumers don't mistake the single ref-table tier for all tables.
+    # tiers: a lightweight DECLARATION of which lambda levels exist (downstream
+    # only reads tiers[].level). Per-table S is NOT repeated here -- the full,
+    # authoritative per-owner-table S lives in extra.table_s_rows. Because the
+    # S-grid's realized S depends on each owner table's N (which spans multiple
+    # tables on stats_CEB_single), a single tiers.S_rows would be ambiguous/re-
+    # dundant; record S only once, per table.
+    tiers = [LambdaTier(level=lv, S_rows=None, single_target=None,
+                        estimate_percent=None) for lv in args.levels]
+    # Full per-owner-table S map (single authoritative source of realized S).
     table_s_rows: dict[str, dict] = {}
     for tbl in owner_tables:
         table_s_rows[tbl] = {str(lv): _tier_meta(tbl, lv) for lv in args.levels}
@@ -127,12 +119,12 @@ def main() -> None:
     def _write_meta() -> None:
         write_meta(dest, Meta(bench=args.bench, backend=args.backend, tiers=tiers,
                               param_tiers=tuple(be.representation_param_tiers()),
-                              extra={"note": "S-grid [30000,300000]; tiers.S_rows "
-                                             f"shown for ref table={ref_tbl}; "
-                                             "per-owner-table S in table_s_rows",
-                                     "ref_table": ref_tbl,
-                                     "owner_tables": owner_tables,
-                                     "table_s_rows": table_s_rows}))
+                              extra={
+                                  "method": "S-grid global S_rows [30000,300000]; "
+                                            "per-owner-table realized S in table_s_rows",
+                                  "levels": list(args.levels),
+                                  "owner_tables": owner_tables,
+                                  "table_s_rows": table_s_rows}))
 
     _write_meta()
 
@@ -179,11 +171,13 @@ def main() -> None:
     print(f"[sgrid] COMPLETE {args.bench}/{args.backend} "
           f"ok={done} skip={skipped} fail={failed} "
           f"({el/60:.1f}m)", flush=True)
-    # leave the backend in natural state (clean residual colgroups/ext stats)
+    # leave each measured table in natural state (clean residual colgroups / ext
+    # stats on every owner table the run touched)
     try:
-        for s in list(be.list_stats(ref_tbl)):
-            be.drop_stat(s)
-        be.restore_natural_stats(ref_tbl)
+        for tbl in owner_tables:
+            for s in list(be.list_stats(tbl)):
+                be.drop_stat(s)
+            be.restore_natural_stats(tbl)
     except Exception:
         pass
     # finalize _meta.json (per-owner-table S map included)

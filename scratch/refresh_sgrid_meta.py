@@ -71,24 +71,21 @@ def main() -> None:
                 "single_target": be.single_col_target_for_level(tbl, lv),
                 "estimate_percent": be.lambda_sampling_percent(tbl, lv)}
 
-    ref_tbl = ({"census": ".climate", "dmv": ".dmv",
-                "stats_ceb_single": ".posts"}[args.bench])
-    if ref_tbl not in owner_tables and owner_tables:
-        ref_tbl = owner_tables[0]
-    tiers = [LambdaTier(level=lv, **_tier(ref_tbl, lv)) for lv in levels]
+    # tiers: lightweight declaration of which lambda levels exist (downstream
+    # reads only tiers[].level); the real per-owner-table S is in table_s_rows.
+    tiers = [LambdaTier(level=lv, S_rows=None, single_target=None,
+                        estimate_percent=None) for lv in levels]
     table_s_rows = {t: {str(lv): _tier(t, lv) for lv in levels}
                     for t in owner_tables}
 
     write_meta(dest, Meta(bench=args.bench, backend=args.backend, tiers=tiers,
                           param_tiers=tuple(be.representation_param_tiers()),
-                          extra={"note": "S-grid [30000,300000]; tiers.S_rows shown "
-                                         "for ref table; per-owner-table S in "
-                                         "table_s_rows",
-                                 "ref_table": ref_tbl,
+                          extra={"method": "S-grid global S_rows [30000,300000]; "
+                                           "per-owner-table realized S in table_s_rows",
+                                 "levels": levels,
                                  "owner_tables": owner_tables,
                                  "table_s_rows": table_s_rows}))
-    print(f"refreshed {dest}/_meta.json (ref={ref_tbl}, "
-          f"owner_tables={owner_tables})")
+    print(f"refreshed {dest}/_meta.json (owner_tables={owner_tables})")
     print(json.dumps(table_s_rows, indent=1))
 
 
