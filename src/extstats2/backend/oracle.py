@@ -288,6 +288,26 @@ class OracleBackend(Backend):
         target — there is no per-column statistics_target knob on Oracle."""
         return None
 
+    def max_param_at_level(self, table: str, level: int) -> Optional[float]:
+        """No engine-imposed lattice cap on the representation param at a λ-tier.
+
+        On PG, ``SIZE/param <= S/300`` is a genuine identity because the *same*
+        knob (``statistics_target``) is both the MCV-list cap and the driver of
+        sampling (``S = target*300``), so a statistic cannot represent more than
+        its own target. Oracle has no such coupling: ``SIZE`` (histogram buckets)
+        and ``estimate_percent`` (the λ sampling depth) are two *independent*
+        arguments of the same ``GATHER_TABLE_STATS`` call, so a column group can
+        legally carry ``SIZE 254`` even when the λ scan samples 1% of the table.
+
+        Returning ``None`` (the base-class contract for "cap not engine-imposed")
+        means the only bound on the offered representation params is
+        :meth:`representation_param_tiers` itself; the generic per-λ driver no
+        longer prunes ``SIZE=254`` at L0 as it would under the inherited PG
+        ``S/300`` rule. (λ still affects *fidelity* of a sparse histogram, but
+        that is a quality axis addressed separately, not a hard level->param cap.)
+        """
+        return None
+
     def enter_lambda_state(self, table: str, level: int) -> None:
         """Realize λ-tier ``level``: one single-column-only GATHER at that λ's
         ``estimate_percent`` (SIZE AUTO — natural single-col histograms), no column
