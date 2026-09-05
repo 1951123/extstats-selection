@@ -93,21 +93,48 @@ def main() -> None:
 
     cand_all = generate_candidates_per_query([Q[k] for k in qids], arities=(2,))
 
-    # Write/refresh _meta.json tiers (S_rows per level for a representative table).
-    ref_tbl = {  # bench -> a known table present on this backend
+    # Owner table(s) this bench actually measures (single per query; the set spans
+    # every base table the candidate-bearing queries touch -> multi-table benches).
+    owner_tables = sorted({cands[0].table for cands in cand_all.values() if cands})
+
+    def _tier_meta(tbl: str, lv: int) -> dict:
+        rows = be.lambda_sampling_rows(tbl, lv)
+        st = be.single_col_target_for_level(tbl, lv)
+        ep = be.lambda_sampling_percent(tbl, lv)
+        return {"S_rows": rows, "single_target": st, "estimate_percent": ep}
+
+    # Per-bench representative table for the global tiers summary line.
+    ref_tbl = {  # census/dmv single big table; stats_CEB uses its largest filter
         "census": ".climate", "dmv": ".dmv", "stats_ceb_single": ".posts",
     }[args.bench]
+    # If the ref table is not actually among owner tables (e.g. renamed), fall
+    # back to the first real owner table.
+    if ref_tbl not in owner_tables and owner_tables:
+        ref_tbl = owner_tables[0]
     tiers = []
     for lv in args.levels:
-        rows = be.lambda_sampling_rows(ref_tbl, lv)
-        st = be.single_col_target_for_level(ref_tbl, lv)
-        ep = be.lambda_sampling_percent(ref_tbl, lv)
-        tiers.append(LambdaTier(level=lv, S_rows=rows, single_target=st,
-                                estimate_percent=ep))
-    write_meta(dest, Meta(bench=args.bench, backend=args.backend, tiers=tiers,
-                          param_tiers=tuple(be.representation_param_tiers()),
-                          extra={"note": "S-grid [30000,300000]; "
-                                         f"ref table={ref_tbl}"}))
+        t = _tier_meta(ref_tbl, lv)
+        tiers.append(LambdaTier(level=lv, S_rows=t["S_rows"],
+                                single_target=t["single_target"],
+                                estimate_percent=t["estimate_percent"]))
+    # Full per-owner-table S map: for a multi-table bench the S_grid tier's
+    # realized S (and thus how-much) differs per owner table's N. Record it so
+    # downstream consumers don't mistake the single ref-table tier for all tables.
+    table_s_rows: dict[str, dict] = {}
+    for tbl in owner_tables:
+        table_s_rows[tbl] = {str(lv): _tier_meta(tbl, lv) for lv in args.levels}
+
+    def _write_meta() -> None:
+        write_meta(dest, Meta(bench=args.bench, backend=args.backend, tiers=tiers,
+                              param_tiers=tuple(be.representation_param_tiers()),
+                              extra={"note": "S-grid [30000,300000]; tiers.S_rows "
+                                             f"shown for ref table={ref_tbl}; "
+                                             "per-owner-table S in table_s_rows",
+                                     "ref_table": ref_tbl,
+                                     "owner_tables": owner_tables,
+                                     "table_s_rows": table_s_rows}))
+
+    _write_meta()
 
     done, skipped, failed = 0, 0, 0
     t0 = time.time()
@@ -159,6 +186,8 @@ def main() -> None:
         be.restore_natural_stats(ref_tbl)
     except Exception:
         pass
+    # finalize _meta.json (per-owner-table S map included)
+    _write_meta()
 
 
 if __name__ == "__main__":
