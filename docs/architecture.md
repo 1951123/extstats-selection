@@ -836,6 +836,19 @@ $$
 - **Direction A**（thin-in-deep，$p<S_t/300$）→ 晶格内部恒可行、且扫描轴免费；单列/薄 ext 都 ride。
 - **Oracle 同形**：$S_t$=`estimate_percent`（自由设），cap 是否施加是优化器层可选护栏（engine 不强制）。
 
+> **〔code-enforced 修订 2026-09-05〕λ→param 晶格 cap 是 PG-only 的实现事实;Oracle 上必须由后端
+> 显式解除,通用 driver 不得继承 PG 的 `S/300`。** 上述"Oracle 同形/可选护栏"在**实现层**曾一度被违反:
+> `Backend.max_param_at_level`(base)返回 `S_rows/300`,而 `oracle.py` 未覆写 → Oracle **静默继承了
+> PG 的 `S/300` cap**,把 `SIZE=254` 错判为 L0 下不可建(漏测),系统性低估 Oracle 在 L0 的表示范围。
+> 修正:Oracle 覆写 `max_param_at_level → None`(base docstring 本已写明"引擎不强制时(Oracle)返回
+> None";`SIZE buckets` 与 `estimate_percent` 是同一个 `GATHER_TABLE_STATS` 的两个独立实参,无 floor)。
+> **语义**:λ→param 的 $\,p\le S_t/300$ 晶格只在 **PG**(其 `statistics_target` 同时是 MCV 上限与采样
+> 驱动,$S=300·\text{target}$)是 engine 强制的真限制;在 Oracle 上该上界只是**可选护栏**(若想统计健全、
+> 让浅采不撑 254 桶),不是引擎约束。若 Oracle 侧要加,应作为 Oracle 网格/边界的显式选择施加,而非
+> 由通用 driver 默认套 PG 公式。
+> **语料后果**:修正后全量 Oracle L0 语料每候选同时 offer {64,254} 两个 param(slot×2、成本约×2);
+> 任何只测到 64 的旧 Oracle 语料(census_mini、早期被中止的 census)都是在泄漏下测的、需重测才报告 254。
+
 **决策变量 = 每表采样档 $S_t$ + 每 (列组, param)。** 决策分两层，但都服务于同一条 cap：
 - 外层决定每表 $S_t\in\Lambda$（采样＝成本与 fidelity 的唯一驱动）。**PG 实现 $S_t$ = 把该表*所有*
   单列 target 统一设到 $\theta=S_t/300$**（它们成为/顶到 max，`targrows≥S_t`）；Oracle 直接设
