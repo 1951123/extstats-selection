@@ -81,6 +81,12 @@ optimize 的 model 假设每个 query 由它最佳统计**独立服务**（inter
   尚未有 S-grid 重派生的 L3：
   - dmv、stats_ceb_single 的 PG L3、以及 Oracle 的 L3 → **待部署/待测**（measure 表
     的覆盖缺口同步）。
+  - **Oracle 上 range 主导查询 ≠ 统计选择失败**：对 stats_CEB_single 里 117 条近唯一
+    TIMESTAMP 宽范围过滤，Oracle 单列 base 估计就差，且 Oracle column-group/扩展统计
+    **不参与普通 range**——若在 Oracle 对这些 query 跑 L3（naive/FB 一类的 model-vs-true），
+    得到的高低差反映的是 Oracle 引擎对该类谓词的估计特性（见 `measure.md §4.2`），
+    不能当"加扩列无效/本方法失败"下结论。Oracle L3 应只在其无 timestamp-range 子集上
+    作为统计选择的可信对照。
   - "单表 extstats 迁移到多表 join workload 的有效边界"（早期 stats_CEB 多表观察）
     属**历史需重派生**项，本文档不嵌入其旧数（遵循"不引用 archive、结论重派生"
     约定）：要给出目前可信的四策略边界，需在 stats_CEB(多表) 的 S-grid 语料上重跑
