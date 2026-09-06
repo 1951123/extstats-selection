@@ -9,29 +9,35 @@
 ## 1. S-grid：dataset-bound 采样设计
 
 测量"该买哪些多列统计、要采样多深"需要先定采样档。S-grid 用一个**与数据集绑定**的
-全局采样行数网格跨 PG/Oracle 施加，使同一语料在两个引擎上可比：
+**请求(请求档)采样行网格** $\{S_{\ell}\}$ 跨 PG/Oracle 施加，使同一语料在两个引擎上可比：
+$$S_{\ell}\in\{30000,\,300000\}\qquad(L0:\ S_{0}{=}30000,\ L1:\ S_{1}{=}300000).$$
 
-$$S_{rows}\in\{30000,\,300000\}.$$
+> 术语定标：$S_{\ell}$ 是**请求档**(requested depth)；因每表行数 $N$ 不同，实际采样行
+> $S_{\text{realized}}=\min(S_{\ell},N)$（见 §1.1），两引擎用不同 knob 实现同一条 realized-S。
 
-- **PG**：`statistics_target = S/300` → level L0≈`100`、L1≈`1000`（`single_target`）。
-  一次 ANALYZE 的采样行 `targrows≈min(300·target, N)`（Chaudhuri floor）。
-- **Oracle**：每 **owner 表**给 `estimate_percent = 100·min(S,N)/N`（realized 行数
-  $=\min(S,N)$；小表因 $\min(S,N)=N$ 饱和于 100%）；表示分辨率（桶/`SIZE`）由引擎
-  自决。realized-S 随表行数分三类见 §1.1。
+- **PG**：`statistics_target = S_ℓ/300` → L0≈`100`、L1≈`1000`(`single_target`)；一次 ANALYZE
+  实际采样行 `= min(300·target, N)`（Chaudhuri floor；即 realized）。
+- **Oracle**：每 **owner 表**给 `estimate_percent = 100·min(S_ℓ,N)/N`（realized 行数
+  $=\min(S_{\ell},N)$；小表因 $\min(S_{\ell},N)=N$ 饱和于 100%）；表示分辨率（桶/`SIZE`）由引擎
+  自决。
 
-动机：错误的"跨档公平"会给"调采样导致基线漂移"的不公平对比；把采样行 S 作为
-自变量、所有单列都随 $\theta=S/300$（PG）或随 `est%`（Oracle）同深，让 no-ext 基线
-与 ext 候选在**同一采样态**里配对，只差是否含扩展统计——这是同-$S$ 的公平对照。
+动机：错误的"跨档公平"会给"调采样导致基线漂移"的不公平对比；把采样档作为自变量，
+所有单列都随请求档同深（PG 设 target $=S_{\ell}/300$；Oracle 设 `est%` 到同 realized-S），
+让 no-ext 基线（该 $S_{\text{realized}}$ 态无扩展统计）与 ext 候选在**同一采样态**里配对，
+只差是否含扩展统计——这是**同 realized-S 的公平对照**，不是只比"请求档"。
 
 ### 1.1 表行数三类情况：per-table realized S
 
-全局 $S_{rows}\in\{30000,300000\}$ 是"请求深度"，因每表行数 $N$ 不同，**实际被采样
-的行数（realized S）按 owner 表行数分三类**。两引擎实现的是同一条 realized-S：
-$$S_{\text{realized}}(t, \ell)=\min(S_{\ell},\,N_t),\qquad\text{PG: }S=\min(300\cdot\text{target},N_t),\ \ \text{Oracle: }est\%=\tfrac{100\min(S,N_t)}{N_t}.$$
+全局请求档 $S_{\ell}\in\{S_{0}{=}30000,\,S_{1}{=}300000\}$ 是"请求深度"，因每表行数 $N$
+不同，**实际被采到的行数 $S_{\text{realized}}(t,\ell)=\min(S_{\ell},N_t)$ 按 owner 表行数分三类**。
+两引擎实现的是同一条 realized-S（PG 经 `300·target`、Oracle 经 `est%`）：
+$$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
+  \text{PG: }S_{\text{realized}}=\min(300\cdot\text{target},N_t),\quad
+  \text{Oracle: }est\%=\tfrac{100\,\min(S_{\ell},N_t)}{N_t}.$$
 
-| 类 | 表行数 N | L0(请求 30000) | L1(请求 300000) | effective 采样点 |
+| 类 | 表行数 N | L0：$S_0{=}30000$ | L1：$S_1{=}300000$ | effective 采样点(realized) |
 |---|---|---|---|---|
-| **小表 (tiny)** | $N<30000$ | 两 tier 都 $>N$ → realized $=N$（全表） | 同左（仍全表） | $N$（**L0≡L1 一个点**，饱和于全表） |
+| **小表 (tiny)** | $N<30000$ | 两档都 $>N$ → realized $=N$（全表） | 同左（仍全表） | $N$（**L0≡L1 一个点**，饱和于全表） |
 | **中表 (mid)** | $30000\le N<300000$ | realized $=30000$（部分） | realized $=N$（**全表**） | $\{30000,\;N=\text{full}\}$ |
 | **大表 (large)** | $N\ge300000$ | realized $=30000$（target≈100） | realized $=300000$（target≈1000） | $\{30000,\;300000\}$ |
 
@@ -41,8 +47,9 @@ $$S_{\text{realized}}(t, \ell)=\min(S_{\ell},\,N_t),\qquad\text{PG: }S=\min(300\
   到 <100）。此时 L0/L1 的**采样深度无差别**——只剩表示参数（Oracle 引擎自决桶 / PG 无
   更高 target 空间）可言，被选统计会因表太小而在两档等价，从而测量里只有 1 个有效
   采样点。
-- **中表**：L0 是一个真部分档（采 3 万行），L1 恰触及全表；这是 L1 "到全表的过渡带"，
-  反映 dataset-bound 的一个边界：请求 300000 但表只有几十万行内即封顶。
+- **中表**：L0 是一个真部分档（realized 采 $S_0{=}3$ 万行），L1 恰触及全表；这是 L1
+  到全表的过渡带：请求档 $S_1{=}300000$ 已≥N、realized 被封顶于 N(全表)——dataset-bound 的
+  一个边界。
 - **大表**：主流研究表两档各是真部分采样（L0≈3 万行 / L1≈30 万行），distinct 采样点 =
   $\{30000,300000\}$——只有在此类上 S-grid 的 λ 轴才真正拉开。
 
