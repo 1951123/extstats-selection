@@ -15,8 +15,14 @@ q-error；决策 = 创建哪些 (列组,cap) $y$ + 每条 query 用哪个 $x$；
 - **maint**（`unit=seconds-per-refresh`）：部署后刷新一次的总代价，由**表激活固定
   档**（per-table base，`fixed_sec`）+ **每统计可加变动**构成（Y-two-layer）。
 
-level L0/L1 各自给出一条曲线（同一 bench 同一采样态内）。quality = mean（主）+
-geo/max，均以 candidate-bearing 查询为分母。
+level L0/L1 各自给出一条曲线（同一 bench 同一采样态内）。
+
+**选档决策解出的目标 = 算术均值(mean)。** 因为在默认档 **cap=1（每查询至多选一个统计，
+见 §1.2）** 下目标退化为**精确线性**：每个查询的误差是独立线性项 $e_i^0-\sum_s\Delta_{is}x_{is}$，
+整体对其求**算术平均**即可（逐查询可加，无乘性 log 叠加）。故曲线的纵轴 mean 就是模型
+**求解目标**本身，而不仅是报告口径。
+$\text{geo}$/$\max$ 则是在该选中集上算出的**派生报告指标**（几何/最大），**不进入** cap=1
+的 MILP 目标——报告时三者都给出、都以 candidate-bearing 查询为分母（见 §2-§4 表、measure §5）。
 
 ### 1.1 符号定义
 
