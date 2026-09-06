@@ -30,7 +30,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--benches", nargs="+", default=["census", "dmv", "stats_ceb_single"])
     ap.add_argument("--out", default="results")
-    ap.add_argument("--k", type=int, default=8)
+    ap.add_argument("--k-cap", type=int, default=100,
+                    help="cap on #distinct 2-col probe stats (k=min(cap,#pairs))")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--db", default=None, help="override pg db for all benches")
     args = ap.parse_args()
@@ -50,9 +51,9 @@ def main() -> None:
                          cfg=DBConfig(host="localhost", port=5432, user="postgres",
                                       password="postgres", dbname=pgdb))
         print(f"[fit-pg] {bench}: pgdb={pgdb} tables={owner_tables} "
-              f"levels={levels} k={args.k} repeats={args.repeats}", flush=True)
+              f"levels={levels} k-cap={args.k_cap} repeats={args.repeats}", flush=True)
         fit_pg_bench(bench, pgdb, owner_tables, levels, outdir=Path(args.out),
-                     backend=be, k=args.k, repeats=args.repeats, write=True)
+                     backend=be, k_cap=args.k_cap, repeats=args.repeats, write=True)
         print(f"[fit-pg] {bench}: wrote {corpus_dir / '_maint.json'}", flush=True)
 
 

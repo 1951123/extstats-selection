@@ -47,9 +47,10 @@ from ..backend.capabilities import Capacity
 from ..backend.postgres import PostgresBackend
 from .maint_model import MaintParams, write_maint
 
-# A batch of identical 2-col ext stats to magnify the marginal (>1 gives a larger,
-# more stable (t_with_k - fixed)/k delta; kept modest to stay representative).
-_DEFAULT_K = 8
+# Cap on the number of DISTINCT 2-col probe statistics used to measure c_var.
+# A larger k gives a bigger, more stable aggregate delta (higher SNR); capped at
+# 100 to stay representative and bound the one-time DDL.
+_DEFAULT_K_CAP = 100
 # Median repeats for each timed refresh.
 _DEFAULT_REPEATS = 3
 # Representative statistic kind to build in the probe.
@@ -67,25 +68,35 @@ def _table_sql(table: str) -> str:
     return table.lstrip(".")
 
 
-def _regular2(table: str, backend: PostgresBackend) -> tuple[str, str]:
-    """First two regular columns of ``table`` for the probe stat."""
+def _regular_columns(table: str, backend: PostgresBackend) -> list[str]:
+    """Regular (user, non-system) columns of ``table`` for building probe stats."""
     cols = backend._regular_columns(table)
-    cols = [c for c in cols if not c.startswith("__")]
-    if len(cols) >= 2:
-        return cols[0], cols[1]
-    raise ValueError(f"table {table!r} has <2 regular columns ({cols})")
+    return [c for c in cols if not c.startswith("__")]
 
 
-def _probe_stat(backend: Backend, table: str, level: int, c0: str, c1: str,
-                idx: int) -> StatObject:
+def _two_col_pairs(cols: list[str]) -> list[tuple[str, str]]:
+    """All distinct unordered 2-column pairs of ``cols``."""
+    return [(cols[i], cols[j])
+            for i in range(len(cols)) for j in range(i + 1, len(cols))]
+
+
+def _probe_stats_for_table(backend: Backend, table: str, level: int,
+                           k_cap: int) -> list[StatObject]:
+    """One distinct-column-pair mcv probe stat per 2-col pair of ``table``, capped
+    at ``k_cap``; returns ``[]`` if the table has <2 regular columns (no deployable
+    2-col extstat, so no per-stat marginal to measure)."""
     mcv = next((c for c in backend.supported_capabilities() if c.name == _PROBE_KIND),
                None)
     if mcv is None:
-        raise ValueError("backend has no mcv capability to probe maintenance with")
-    return StatObject(
-        table=table, columns=(c0, c1), capability=mcv,
-        capacity=Capacity(level, label=f"L{level}-maint"),
-        name=f"__ext_maint_{_table_sql(table)}_{level}_{idx}")
+        return []
+    pairs = _two_col_pairs(_regular_columns(table, backend))[:k_cap]
+    objs = []
+    for idx, (c0, c1) in enumerate(pairs):
+        objs.append(StatObject(
+            table=table, columns=(c0, c1), capability=mcv,
+            capacity=Capacity(level, label=f"L{level}-maint"),
+            name=f"__ext_maint_{_table_sql(table)}_{level}_{idx}"))
+    return objs
 
 
 def _time_analyze_once(backend: PostgresBackend, table: str) -> float:
@@ -108,7 +119,7 @@ _CVAR_FLOOR = 0.001
 
 
 def measure_table_maintenance_pg(backend: PostgresBackend, table: str, level: int,
-                                 *, k: int = _DEFAULT_K,
+                                 *, k_cap: int = _DEFAULT_K_CAP,
                                  repeats: int = _DEFAULT_REPEATS,
                                  analyze_only: bool = False
                                  ) -> tuple[float, float]:
@@ -117,51 +128,64 @@ def measure_table_maintenance_pg(backend: PostgresBackend, table: str, level: in
     ``fixed``  = median of ``repeats`` BARE ``ANALYZE`` runs (single columns at the
     λ target ``S/300``, no ext stat) = one-refresh shared-scan seconds.
 
-    ``c_var``  = the per-extstat marginal, resolved by PAIRED per-round deltas:
-    each round times a bare ANALYZE then an ANALYZE carrying ``k`` probe column-group
-    stats back-to-back (same cache state, cancelling slow drift); c_var = median
-    of ``repeats`` deltas / ``k``. Genuine measurement is kept, but a measured value
+    ``c_var``  = the mean per-extstat marginal over the table's DISTINCT 2-column
+    pairs, resolved by PAIRED per-round deltas: each round times a bare ANALYZE
+    then an ANALYZE carrying ``k`` probe column-group stats (one per distinct
+    2-col pair, ``k = min(k_cap, #pairs)``) back-to-back (same cache state,
+    cancelling slow drift); c_var = median of ``repeats`` deltas / ``k``. Using
+    distinct pairs (not stacked identical ones) makes it the pair-averaged
+    marginal over the real deployable 2-col population. A measured value
     < :data:`_CVAR_FLOOR` (0.001s) is treated as exactly 0.001s (decision
-    2026-09-06) — sub-ms marginal is below wall-clock resolution on fast tables
-    and can't be 0.
+    2026-09-06).
+
+    A table with <2 regular columns has no deployable 2-col extended statistic,
+    so there is no per-stat marginal to measure -> returns ``(fixed, 0.0)``.
+
+    PROTOCOL (n=0 vs n=k, the correct marginal): ``fixed`` is timed with NO
+    extended statistic present (bare ANALYZE at the λ single-col target); then the
+    ``k`` distinct probe column-groups are created, computed once (untimed), and
+    ``with_k`` is timed as ANALYZE passes that maintain those existing stats. Only
+    then is c_var = (with_k - fixed)/k. (Timing both sides after creating the stats
+    would make the "bare" pass also maintain them -> a ~0 fake delta.)
     """
     tgt = backend._target_for_level(table, level)
     if tgt is None:
         raise KeyError(f"level {level} not realised on {table!r}")
-    if not analyze_only:
-        backend.enter_lambda_state(table, level)
+    backend.enter_lambda_state(table, level) if not analyze_only else None
 
-    c0, c1 = _regular2(table, backend)
-    objs = [_probe_stat(backend, table, level, c0, c1, i) for i in range(k)]
-    for o in objs:
-        backend.create_stat(o)
-    try:
-        param = max(1, int(tgt))
-        with backend.conn.cursor() as cur:
-            for o in objs:
-                cur.execute(f"ALTER STATISTICS \"{o.name}\" SET STATISTICS {param}")
-        # warm once so the first paired round is not cold
-        _time_analyze_once(backend, table)
-        bare_times: list[float] = []
-        deltas: list[float] = []
-        for _ in range(repeats):
-            bare = _time_analyze_once(backend, table)
-            with_k = _time_analyze_once(backend, table)  # maintains all k stats
-            bare_times.append(bare)
-            deltas.append(with_k - bare)
-        fixed = _median(bare_times)
-        per_stat = (_median(deltas)) / k
-    finally:
+    # ---- fixed @ n=0 (no ext stats) -------------------------------------
+    _time_analyze_once(backend, table)         # warm (untimed)
+    bare_times = [_time_analyze_once(backend, table) for _ in range(repeats)]
+    fixed = _median(bare_times)
+
+    # ---- c_var: marginal added by maintaining k existing stats ----------
+    objs = _probe_stats_for_table(backend, table, level, k_cap)
+    k = len(objs)
+    per_stat = 0.0
+    if k:
         for o in objs:
-            backend.drop_stat(o)
-    # genuine measurement kept; floor anything below the 0.001s bound up to 0.001s
-    return fixed, max(per_stat, _CVAR_FLOOR)
+            backend.create_stat(o)
+        try:
+            param = max(1, int(tgt))
+            with backend.conn.cursor() as cur:
+                for o in objs:
+                    cur.execute(
+                        f"ALTER STATISTICS \"{o.name}\" SET STATISTICS {param}")
+            _time_analyze_once(backend, table)     # compute the k stats once (untimed)
+            withk_times = [_time_analyze_once(backend, table)
+                           for _ in range(repeats)]
+            with_k = _median(withk_times)
+        finally:
+            for o in objs:
+                backend.drop_stat(o)
+        per_stat = max((with_k - fixed) / k, _CVAR_FLOOR)
+    return fixed, per_stat
 
 
 def fit_pg_bench(bench: str, pgdb: str, owner_tables: Sequence[str],
                  levels: Sequence[int], *, outdir: Path = Path("results"),
                  backend: Optional[PostgresBackend] = None,
-                 k: int = _DEFAULT_K, repeats: int = _DEFAULT_REPEATS,
+                 k_cap: int = _DEFAULT_K_CAP, repeats: int = _DEFAULT_REPEATS,
                  write: bool = True) -> MaintParams:
     """Fit PG maintenance params for one benchmark corpus and persist ``_maint.json``.
 
@@ -178,12 +202,12 @@ def fit_pg_bench(bench: str, pgdb: str, owner_tables: Sequence[str],
         ft, vt = {}, {}
         for level in levels:
             fixed, cvar = measure_table_maintenance_pg(be, table, level,
-                                                       k=k, repeats=repeats)
+                                                       k_cap=k_cap, repeats=repeats)
             ft[str(level)] = fixed
             vt[str(level)] = cvar
             print(f"  [pg] {bench} {table} L{level}: "
                   f"fixed={fixed:.3f}s c_var={cvar:.2e}s "
-                  f"(k={k}, repeats={repeats})", flush=True)
+                  f"(2col-cap={k_cap}, repeats={repeats})", flush=True)
         fixed_s[table] = ft
         cvar_s[table] = vt
     params = MaintParams(backend="postgres", fixed_seconds=fixed_s, c_var=cvar_s)
