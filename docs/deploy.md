@@ -29,9 +29,10 @@ optimize 的 model 假设每个 query 由它最佳统计**独立服务**（inter
 
 ## 3. 五类真值档与四策略命名
 
-实验中出现的真值文件与语义（文件名直连 results/）：
+实验中出现的真值文件与语义（**目录 `results/e2e/{backend}/`**；当前全部为 PG census →
+`results/e2e/postgres/`，Oracle 的 model-vs-true 部署将用自有命名落在 `oracle/`）：
 
-| 策略 | 语义 | 结果文件 |
+| 策略 | 语义 | 结果文件（于 `results/e2e/postgres/`） |
 |---|---|---|
 | naive(coexist,创建序=solver 顺序) | 不修干扰 | `e2e_sgrid_naive_L1_100KB.json` |
 | topo-order | 轻量确定性断环 | `e2e_true_ordered_topo_sgrid_L1_100KB.json` |
@@ -99,5 +100,5 @@ optimize 的 model 假设每个 query 由它最佳统计**独立服务**（inter
 | 排序器 | `src/extstats2/core/optimize_pg_order.py` |
 | 排序/部署 drivers | `scratch/e2e_order_deploy.py`, `fb_order_save.py`, `deploy_phase2_order.py`, `e2e_deploy_census.py` |
 | 共享 ctx loader | `scratch/_pg_order_ctx.py` |
-| 四策略真值 JSON | `results/e2e_{naive,disjoint,true_ordered_*}_sgrid_L1_100KB.json` |
+| 四策略真值 JSON | `results/e2e/postgres/e2e_{naive,disjoint,true_ordered_*}_sgrid_L1_100KB.json`（→ `results/e2e/{oracle}/…` 待补） |
 | 比较图 | `results/figures/e2e_deploy_comparison_sgrid.png` |

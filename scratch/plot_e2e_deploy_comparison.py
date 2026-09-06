@@ -28,8 +28,10 @@ OUT = ROOT / "results" / "figures" / "e2e_deploy_comparison_sgrid.png"
 # The shared interference-free predicted set = the MILP L1 @100 KB optimum, which is
 # exactly what naive's predicted_metrics holds. topo/FB jsons only carry a scalar
 # predicted_mean, so we reuse naive's per-metric predicted for them.
-NAIVE_FN = "results/e2e_sgrid_naive_L1_100KB.json"
-DISJ_FN = "results/e2e_sgrid_disjoint_L1_100KB.json"
+# All current e2e four-strategy runs are PG census -> results/e2e/postgres/.
+E2E_DIR = ROOT / "results" / "e2e" / "postgres"
+NAIVE = "e2e_sgrid_naive_L1_100KB.json"
+DISJ = "e2e_sgrid_disjoint_L1_100KB.json"
 
 
 def _own_pred(pm: dict) -> dict:
@@ -42,21 +44,22 @@ def _true_metrics(tm: dict) -> dict:
             "max": tm.get("max")}
 
 
-def load():
-    shared = _own_pred(json.loads((ROOT / NAIVE_FN).read_text())["predicted_metrics"])
-    disj_pred = _own_pred(json.loads((ROOT / DISJ_FN).read_text())["predicted_metrics"])
+def load(backend: str = "postgres"):
+    d0 = E2E_DIR.parent / backend
+    shared = _own_pred(json.loads((d0 / NAIVE).read_text())["predicted_metrics"])
+    disj_pred = _own_pred(json.loads((d0 / DISJ).read_text())["predicted_metrics"])
     rows = []
 
     def add(label, fn, pred):
-        d = json.loads((ROOT / fn).read_text())
+        d = json.loads((d0 / fn).read_text())
         rows.append({"label": label,
                      "true": _true_metrics(d["true_metrics"]),
                      "pred": pred})
 
-    add("naive coexist 279", NAIVE_FN, shared)                                    # own == shared
-    add("topo-order 279", "results/e2e_true_ordered_topo_sgrid_L1_100KB.json", shared)
-    add("FB-order 279", "results/e2e_true_ordered_fb_sgrid_L1_100KB.json", shared)
-    add("disjoint 32", DISJ_FN, disj_pred)                                        # own (worse) pred
+    add("naive coexist 279", NAIVE, shared)                                      # own == shared
+    add("topo-order 279", "e2e_true_ordered_topo_sgrid_L1_100KB.json", shared)
+    add("FB-order 279", "e2e_true_ordered_fb_sgrid_L1_100KB.json", shared)
+    add("disjoint 32", DISJ, disj_pred)                                          # own (worse) pred
     return rows
 
 
