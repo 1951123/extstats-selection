@@ -58,6 +58,38 @@ $$S_{\text{realized}}(t, \ell)=\min(S_{\ell},\,N_t),\qquad\text{PG: }S=\min(300\
 > 为何 `_meta.tiers.S_rows` 不写成单值而是按表落 `table_s_rows`（一表一意，stats_CEB 跨
 > 多表各有各 N）。
 
+### 1.2 λ 与 fidelity：表行数三类决定了"每条查询能采到多少个真值行"
+
+fidelity 指"这次 ANALYZE/GATHER 的样本里，**该查询真正命中的那几行**指望出现几次"，
+记作每 (查询, 表, level) 的期望捕获数（`measure` 落盘字段 `lambda_expected`，公式重派生自
+`measure.py::_lambda_expected` / `base.py` sampling contract）：
+
+$$\lambda_{q}(t,\ell)=\underbrace{\tfrac{S_{\text{realized}}(t,\ell)}{N_t}}_{\text{fraction } f_{t,\ell}}\times\ \text{truth}_q.$$
+
+- $\lambda\ll 1$：单次采样**很可能根本看不到**驱动该查询的组合 → 实测 q-error **高方差 /
+  不可信**（配合 `qerror_std`/`qerror_worst`；重复测 1 次以上时取保守值而非乐观均值）。
+- $\lambda\gg 1$：采到多次 → 测量**保真**（组合必被捕获，读数稳定）。
+
+**关键：λ 是"逐表、逐查询 truth"的量，但三类表行数决定了 $f_{t,\ell}$（每表每级能采多大比例）**，
+因此把三类与 fidelity 直接挂钩：
+
+| 类 | $f$ 在这类的形态 | fidelity 含义 |
+|---|---|---|
+| **小表** | 两档都 $f=1$（全表） | $\lambda=\text{truth}$（truth≥1 的组合必被采到）→ **采集永不掉保真**，无采样方差问题；L0 与 L1 的 λ 相同。余下唯一可能限制是**表示参数**（Oracle 引擎自决桶 / PG 封顶 target），非采样 |
+| **中表** | $f_{L0}=30000/N\in(0,1)$，$f_{L1}=1$ | L1 全表 → $\lambda=\text{truth}$ 保真；L0 是部分比例 → 仅当中等稀疏 truth 时 λ 会偏小。转折：$N$ 越靠近 30000，L0 比例越大；越靠近 300000，L0 比例越薄（如 `comments` 174k → $f_{L0}\approx0.17$) |
+| **大表** | $f_{L0}=30000/N$、$f_{L1}=300000/N$（两者都 <1） | 两档都可能让稀疏 truth 的 λ 跌破保真线；且 $f_{L1}\approx10\,f_{L0}$(因 S 之比=10) → **同一条稀疏 query，L1 的 λ 约是 L0 的 10 倍**。最稀疏的坏尾在此类上两档都 λ≪1 → 高方差的根因，也解释了为何"需更高 arity / 更深采样"的反例大多落在 census/dmv 这类大表 |
+
+**量化例（大表，重派生自真实 N）**：
+- census `climate` N≈2.46M：$f_{L0}\approx0.0122$、$f_{L1}\approx0.122$。truth=100 的 query →
+  λ(L0)≈1.2、λ(L1)≈12（L1 保真、L0 边缘）；truth=8 → λ(L0)≈0.10、λ(L1)≈0.98（两档都不可信，
+  属"组合极稀疏、capture 随机二值"的高方差坏尾）。
+- dmv N≈11.6M：$f_{L0}\approx0.0026$、$f_{L1}\approx0.026$；同 truth 下 λ 再缩 5×——Dmv 即便 L1
+  也要 truth≈40 才稳妥，稀疏坏尾更依赖更大 S 或更高 arity。
+
+> 遵循"不硬删、保守化"原则（architecture）：低 λ 查询不删，而是用 `qerror_std/worst`
+> 保守化后进优化，避免把"采样没采到"误当"扩列修不动"。fidelity 是 (truth,N,S) 的逐查询
+> 量，三类表行数只改变 $f$ 取值空间——引用/比较跨表 λ 时务必按各自主表 N 与 truth 重算。
+
 ## 2. 测量引擎/基建
 
 - **协议**：PG 优先 Protocol-M（catalog-mask 加速，把统计设为目标而不重扫整表）；
