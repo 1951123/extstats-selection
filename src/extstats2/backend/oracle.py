@@ -105,10 +105,16 @@ DEFAULT_CAPACITY_LADDER = {
     1: {"s_rows": 300000, "buckets": 254},
 }
 
-# FIXED per-table gather cost (one shared scan), seconds, indexed by tier.
-# Calibrated 2026-09-02 on Census CLIMATE (~2.46M rows), degree 1:
-#   estimate_percent 1% -> 0.54s ; 10% -> 2.10s ; 100% -> 21.7s
-_FIXED_TIER_S = (0.54, 2.10, 21.7)
+# FIXED per-table gather cost (one shared scan), seconds, indexed by S-grid
+# level (ladder {0,1}). Calibrated 2026-09-02 on Census CLIMATE (~2.46M rows),
+# degree 1: sampling S_rows rows costs a GATHER whose time scales with the
+# realized percent S/N:
+#   L0 = 30000 rows   (~1.2% of CLIMATE) -> 0.54s
+#   L1 = 300000 rows  (~12%  of CLIMATE) -> 2.10s
+# (The old fixed-% ladder's 100% tier = 21.7s is gone: the S-grid never
+# realizes a full scan on large tables, so its entry was dead once the ladder
+# dropped to 2 levels and is removed.)
+_FIXED_TIER_S = (0.54, 2.10)
 # Marginal per-statistic component: negligible for column groups sharing a scan
 # (FIXED_ONLY). Kept tiny so the per-stat model still reports a nonzero cost.
 _VAR_PER_STAT_S = 0.002
