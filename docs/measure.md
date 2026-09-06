@@ -15,12 +15,48 @@ $$S_{rows}\in\{30000,\,300000\}.$$
 
 - **PG**：`statistics_target = S/300` → level L0≈`100`、L1≈`1000`（`single_target`）。
   一次 ANALYZE 的采样行 `targrows≈min(300·target, N)`（Chaudhuri floor）。
-- **Oracle**：每 **owner 表**给 `estimate_percent = 100·min(S,N)/N`——小表（如
-  `post_links`，N≪S）饱和于 100%；表示分辨率（桶/`SIZE`）由引擎自决，属引擎侧细节。
+- **Oracle**：每 **owner 表**给 `estimate_percent = 100·min(S,N)/N`（realized 行数
+  $=\min(S,N)$；小表因 $\min(S,N)=N$ 饱和于 100%）；表示分辨率（桶/`SIZE`）由引擎
+  自决。realized-S 随表行数分三类见 §1.1。
 
 动机：错误的"跨档公平"会给"调采样导致基线漂移"的不公平对比；把采样行 S 作为
 自变量、所有单列都随 $\theta=S/300$（PG）或随 `est%`（Oracle）同深，让 no-ext 基线
 与 ext 候选在**同一采样态**里配对，只差是否含扩展统计——这是同-$S$ 的公平对照。
+
+### 1.1 表行数三类情况：per-table realized S
+
+全局 $S_{rows}\in\{30000,300000\}$ 是"请求深度"，因每表行数 $N$ 不同，**实际被采样
+的行数（realized S）按 owner 表行数分三类**。两引擎实现的是同一条 realized-S：
+$$S_{\text{realized}}(t, \ell)=\min(S_{\ell},\,N_t),\qquad\text{PG: }S=\min(300\cdot\text{target},N_t),\ \ \text{Oracle: }est\%=\tfrac{100\min(S,N_t)}{N_t}.$$
+
+| 类 | 表行数 N | L0(请求 30000) | L1(请求 300000) | effective 采样点 |
+|---|---|---|---|---|
+| **小表 (tiny)** | $N<30000$ | 两 tier 都 $>N$ → realized $=N$（全表） | 同左（仍全表） | $N$（**L0≡L1 一个点**，饱和于全表） |
+| **中表 (mid)** | $30000\le N<300000$ | realized $=30000$（部分） | realized $=N$（**全表**） | $\{30000,\;N=\text{full}\}$ |
+| **大表 (large)** | $N\ge300000$ | realized $=30000$（target≈100） | realized $=300000$（target≈1000） | $\{30000,\;300000\}$ |
+
+要点（重派生自 `src/extstats2/backend/{oracle,postgres}.py` 的实现语义）：
+
+- **小表**：两档都超过 N，只能全表采样（Oracle `est%=100`；PG target 被 `n/300` 封顶
+  到 <100）。此时 L0/L1 的**采样深度无差别**——只剩表示参数（Oracle 引擎自决桶 / PG 无
+  更高 target 空间）可言，被选统计会因表太小而在两档等价，从而测量里只有 1 个有效
+  采样点。
+- **中表**：L0 是一个真部分档（采 3 万行），L1 恰触及全表；这是 L1 "到全表的过渡带"，
+  反映 dataset-bound 的一个边界：请求 300000 但表只有几十万行内即封顶。
+- **大表**：主流研究表两档各是真部分采样（L0≈3 万行 / L1≈30 万行），distinct 采样点 =
+  $\{30000,300000\}$——只有在此类上 S-grid 的 λ 轴才真正拉开。
+
+**实际例（stats_CEB 一个 bench 内三种表行数并存，非常能展示为何 S 需按表记）**：
+| stats_CEB owner 表 | N(行) | 类 | realized 采样点 |
+|---|---|---|---|
+| `tags` / `postlinks` | 1032 / 11102 | 小表 | 全表（L0≡L1） |
+| `users` / `badges` / `posts` / `comments` | ~40k / ~80k / ~92k / ~174k | 中表 | $\{30000,\ \text{full}\}$ |
+| `posthistory` / `votes` | ~303k / ~328k | 大表 | $\{30000,\ 300000\}$ |
+
+> 故跨 bench/跨 owner 表比较时，不能假定每张表都有两个不同采样点：要先查
+> `_meta.extra.table_s_rows`（每 owner 表每级 `S_rows`/`estimate_percent`）再引用。这也是
+> 为何 `_meta.tiers.S_rows` 不写成单值而是按表落 `table_s_rows`（一表一意，stats_CEB 跨
+> 多表各有各 N）。
 
 ## 2. 测量引擎/基建
 
