@@ -11,9 +11,9 @@ Per kind: 3(bench) x 2(metric mean|geo) panel.
   * baseline per level as dashed horizontal line.
   x-axis budget (storage: log-bytes; maint: seconds); y mean-panel log scale,
     geo-panel linear.
-Output: results/figures/milp_curve_{kind}_{backend}.png
+Output: results/figures/{backend}/milp_curve_{kind}.png
 Usage:
-  .venv/bin/python -u scratch/plot_milp_curve.py             # PG
+  .venv/bin/python -u scratch/plot_milp_curve.py            # PG
   .venv/bin/python -u scratch/plot_milp_curve.py --backend oracle
 """
 from __future__ import annotations
@@ -44,12 +44,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", default="postgres",
                     choices=["postgres", "oracle"])
-    b = ap.parse_args().backend
-    FIGDIR.mkdir(parents=True, exist_ok=True)
+    backend_ = ap.parse_args().backend
+    figdir = FIGDIR / backend_
+    figdir.mkdir(parents=True, exist_ok=True)
     for kind, k in KIND.items():
         data = {}
         for bench in BENCHES:
-            d = load(bench, kind, b)
+            d = load(bench, kind, backend_)
             data[bench] = {"baseline": d["baseline"], "per_level": d["per_level"],
                            "argmin": d["argmin_over_level"]}
         fig, axes = plt.subplots(3, 2, figsize=(11, 10))
@@ -77,9 +78,9 @@ def main():
                 ax.set_title(f"{BENCH_LABEL[bench]} — {metric}")
                 ax.grid(True, which="both", alpha=0.3)
                 ax.legend(fontsize=6.5)
-        fig.suptitle(f"Unified MILP — {kind} budget [{b}]")
+        fig.suptitle(f"Unified MILP — {kind} budget [{backend_}]")
         fig.tight_layout(rect=[0, 0, 1, 0.97])
-        out = FIGDIR / f"milp_curve_{kind}_{b}.png"
+        out = figdir / f"milp_curve_{kind}.png"
         fig.savefig(out, dpi=150)
         print("wrote", out)
         plt.close(fig)

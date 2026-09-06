@@ -51,7 +51,7 @@ optimize 的 model 假设每个 query 由它最佳统计**独立服务**（inter
 | **FB-order** | 1.409 | **1.51** | **1.285** | **18.85** |
 | disjoint(32 colset, 16.7KB) | 7.66 | 7.71 | 1.636 | 2059.8 |
 
-图：`results/figures/e2e_deploy_comparison_sgrid.png`。
+图：`results/figures/postgres/e2e_deploy_comparison_sgrid.png`（Oracle 的 → `…/oracle/`，待其 L3）。
 
 结论（S-grid）：
 1. **interference gap 是真实的**：interference-free 预测 1.41，naive 重叠共存却落到
@@ -101,4 +101,4 @@ optimize 的 model 假设每个 query 由它最佳统计**独立服务**（inter
 | 排序/部署 drivers | `scratch/e2e_order_deploy.py`, `fb_order_save.py`, `deploy_phase2_order.py`, `e2e_deploy_census.py` |
 | 共享 ctx loader | `scratch/_pg_order_ctx.py` |
 | 四策略真值 JSON | `results/e2e/postgres/e2e_{naive,disjoint,true_ordered_*}_sgrid_L1_100KB.json`（→ `results/e2e/{oracle}/…` 待补） |
-| 比较图 | `results/figures/e2e_deploy_comparison_sgrid.png` |
+| 比较图 | `results/figures/postgres/e2e_deploy_comparison_sgrid.png`（→ `…/{oracle}/` 待补） |

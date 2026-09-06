@@ -23,7 +23,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "results" / "figures" / "e2e_deploy_comparison_sgrid.png"
 
 # The shared interference-free predicted set = the MILP L1 @100 KB optimum, which is
 # exactly what naive's predicted_metrics holds. topo/FB jsons only carry a scalar
@@ -64,7 +63,15 @@ def load(backend: str = "postgres"):
 
 
 def main():
-    rows = load()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--backend", default="postgres",
+                    choices=["postgres", "oracle"])
+    backend = ap.parse_args().backend
+    figdir = ROOT / "results" / "figures" / backend
+    figdir.mkdir(parents=True, exist_ok=True)
+    out = figdir / "e2e_deploy_comparison_sgrid.png"
+    rows = load(backend)
     names = [r["label"] for r in rows]
     # One color per *metric* so the legend matches the bars exactly: predicted
     # bars all share a light color, TRUE bars all share a single dark distinct
@@ -102,9 +109,8 @@ def main():
                  "census climate · L1(S=300k) · 100 KB · one shared ANALYZE per deploy",
                  fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.90))
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT, dpi=150)
-    print("wrote", OUT)
+    fig.savefig(out, dpi=150)
+    print("wrote", out)
     print("\nstrategy                   pred(mean)  TRUE mean    geo   max(TRUE)")
     for r in rows:
         print(f"{r['label']:24s} {r['pred']['mean']:9.3f}  {r['true']['mean']:9.3f}  "
