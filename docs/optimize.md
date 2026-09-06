@@ -18,6 +18,67 @@ q-error；决策 = 创建哪些 (列组,cap) $y$ + 每条 query 用哪个 $x$；
 level L0/L1 各自给出一条曲线（同一 bench 同一采样态内）。quality = mean（主）+
 geo/max，均以 candidate-bearing 查询为分母。
 
+### 1.1 符号定义
+
+| 符号 | 含义 | 备注 |
+|---|---|---|
+| $Q$ | candidate-bearing 查询集 | 报告分母（见 measure §5） |
+| $e_i^0$ | 查询 $i$ 在该 realized-S 态下的 **no-ext 基线** q-error | 同采样态量得 |
+| $s=(t_s,C_s,\ell_s)$ | 一条**物理候选统计**：表 $t_s$、列集 $C_s$、档级 $\ell_s\in\{0,1\}$ | arity-2 列组为主 |
+| $O_i$ | 查询 $i$ 可用的候选集（$C_s\subseteq$ 查询谓词列） | 决定 candidate-bearing |
+| $e_{is}$ | 查询 $i$ 若单独由 $s$ 服务时的 q-error | 同 realized-S 量得 |
+| $c_s$（storage） | $s$ 的存储字节 | budget 轴一 |
+| $c_s^{\mathrm{var}}$ / $B_t[\ell]$（maint） | $s$ 的每统计变动秒；表 $t$ 达最高档 $\ell$ 的一次性固定秒 | Y-two-layer；budget 轴二 |
+| $y_s\in\{0,1\}$ | 是否创建统计 $s$ | 物理创建（跨 query 共享） |
+| $x_{is}\in\{0,1\}$ | 查询 $i$ 是否选用 $s$ | 仅当 $s\in O_i$ |
+
+fidelity/λ 的处理沿用 measure §1.2：低 λ 档的 `e_is` 以保守化读数（如 `worst`/经 σ 抬高）
+进入 $e_{is}$，不硬删该候选/查询。
+
+### 1.2 优化问题形式化（MILP）
+
+在给定采样态（fixed realized-S 与 L0/L1 各自档）下，对一个预算轴投约束、最小化
+candidate-bearing 平均 q-error。quality 目标是 query 级合成值；多选乘性近似与 cap=1
+精确线性两档形式分别是：
+
+$$
+\text{(一般, 多选乘性)}\quad\min\ \tfrac{1}{|Q|}\!\sum_{i\in Q}\log e_i
+\;\approx\;\text{const}+\tfrac{1}{|Q|}\sum_{i}\sum_{s\in O_i} w_{is}x_{is},
+\qquad w_{is}=\log\tfrac{e_i^0}{e_{is}}\,({\le}0);
+$$
+
+$$
+\text{(cap}=1\text{, 默认档, 精确线性)}\quad
+\min\ \tfrac{1}{|Q|}\!\sum_{i\in Q}\Big[e_i^0-\sum_{s\in O_i}\Delta_{is}x_{is}\Big],
+\qquad \Delta_{is}=e_i^0-e_{is}\,(\ge0).
+$$
+
+公共约束：
+
+$$
+\begin{aligned}
+&\text{(storage)}\quad \sum_{s} c_s\,y_s \le C_{bytes};\\[1pt]
+&\text{(maint,\ Y-two-layer)}\quad \sum_{t} B_t\!\big[\max_{s\in S\,:\,t_s=t}\ell_s\big]+\sum_{s} c_s^{\mathrm{var}}\,y_s \le M_{\text{sec}};\\[1pt]
+&\text{(select ⟸ created)}\quad x_{is}\le y_s,\ \ \forall\, i,\ s\in O_i;\\[1pt]
+&\text{(overlap-free 保独立性)}\quad x_{ia}+x_{ib}\le 1 \ \ \forall i,\ a\ne b\in O_i,\ C_a\cap C_b\ne\varnothing;\\[1pt]
+&\text{(同列组至多一档)}\quad \sum_{\ell:\ (t_s,C_s,\ell)} y_{t_s,C_s,\ell}\le 1\ \ \forall (t_s,C_s);\\[1pt]
+&\text{(cap=1, 可选稀疏档)}\quad \sum_{s\in O_i} x_{is}\le1;\\[1pt]
+&y_s,x_{is}\in\{0,1\}.
+\end{aligned}
+$$
+
+说明：
+- **maint 约束里的 max 是非线性的**，代码用表激活指示（阶梯档 $w_{t,\ell}$）线性化：
+  $M_{\text{sec}}$ 对应 `maint` 轴（`unit=seconds-per-refresh`），每表中被激活到最高档只付
+  一次固定 `B_t[⋅]`（`fixed_sec`），再加选中统计的每统计变动 $c_s^{\mathrm{var}}$。
+- **两个预算轴正交**：想给哪个就施加哪条（storage 或 maint），不强制同时给。`optimize.md`
+  下文的 storage 曲线 = 只施加 (storage)；maint 曲线 = 只施加 (maint)。
+- **cap=1（默认档）** 使目标从乘性近似退化为**精确线性**（见 architecture §2/§3）：$\min \sum_i(e_i^0-\sum_s\Delta_{is}x_{is})$，本仓各 bench 曲线即此档。
+- 约束都线性/已线性化 ⇒ 用 `scipy.optimize.milp` 一次求得该 budget 与档下的**模型内全局最优**，
+  不靠搜索。
+- L0/L1 分别按各自「只允许 ℓ=0 或只允许 ℓ=1」再解，得到两条曲线；再做 **argmin-over-level**
+  逐预算挑 `(L*, mean)`（§5）。
+
 ## 2. 基线（no-extstats，candidate-bearing mean）
 
 | bench | L0 mean | L1 mean |
