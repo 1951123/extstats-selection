@@ -63,7 +63,13 @@ def load():
 def main():
     rows = load()
     names = [r["label"] for r in rows]
-    colors = ["#707070", "#f0ad4e", "#2ca02c", "#9467bd"]
+    # One color per *metric* so the legend matches the bars exactly: predicted
+    # bars all share a light color, TRUE bars all share a single dark distinct
+    # color. Strategies are told apart by x-axis position (+ FB annotation),
+    # not by giving every TRUE bar its own color (that would contradict the
+    # single 'TRUE deployed' legend swatch).
+    PRED_COLOR = "#fed976"
+    TRUE_COLOR = "#2a7b9a"   # single color for ALL TRUE bars
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.8))
     for ax, met, title, ylab, logy in [
         (axes[0], "mean", "deployed mean q-error", "mean q-error", False),
@@ -74,9 +80,9 @@ def main():
         pdv = [r["pred"][met] for r in rows]
         trv = [r["true"][met] for r in rows]
         ax.bar([i - 0.18 for i in x], pdv, 0.36, label="predicted (intf-free)",
-               color="#fed976", edgecolor="k")
+               color=PRED_COLOR, edgecolor="k")
         ax.bar([i + 0.18 for i in x], trv, 0.36, label="TRUE deployed",
-               color=colors, edgecolor="k")
+               color=TRUE_COLOR, edgecolor="k")
         ax.axhline(1.0, color="black", ls=":", lw=0.9, alpha=0.45)
         ax.set_xticks(list(x)); ax.set_xticklabels(names, rotation=24, ha="right", fontsize=7.5)
         ax.set_title(title, fontsize=10)
