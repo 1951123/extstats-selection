@@ -156,26 +156,38 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 - **dmv**：总可改进条数最多（L1 1718/1926），修不动的 2col 反例 18 条为 **one-stat
   sufficiency 的边界反例**（需 >2 列 / 更深采样），量化后的 exact 样本以数据为准。
 
-### 4.2 Oracle stats_CEB_single 的引擎边界分块（timestamp-range 基线塌陷）
+### 4.2 Oracle 为何在 stats_CEB_single 的(部分)查询上 base q-error 偏高
 
-**不把 `stats_CEB_single` 的 Oracle "✅ 已测"当"健康可量化"。** 诊断（2026-09-06）表明：该
-oracle 语料约有一半查询的**自然基线塌陷**，是 **Oracle CBO 引擎边界**，不是测量 bug、重跑也
-修不掉。判别特征 = 谓词里是否含**近唯一高基数 TIMESTAMP 列的 range**（`CreationDate/… BETWEEN
-或 ≤/≥ ... ::timestamp`）：
+**不是测量错了**——这两批结果（当前 S-grid 与 `results_archive_pre_sgrid_20260905` 的 dense 语料）一致
+复现，是我们如实读到的 Oracle 估计行为。`stats_CEB_single` 里约一半查询在 Oracle 上仅有
+**单列自然基线的 q-error 就很高**；把它当"扩展统计(多列)失败"或"没测对"都是误读，本质是
+**Oracle 对某类范围过滤的默认选择性估计偏(小)了**，而扩展统计对这类又不参与。解说如下：
 
-| oracle stats_CEB_single 子集 | 查询数 | 基线 q-error(mean/max) | 诊断 |
+**现象(判别=谓词是否含近唯一 TIMESTAMP 列的 range)：**
+
+| oracle stats_CEB_single 子集 | 唯一查询 | 基线 q-error(mean/max) | 性质 |
 |---|---|---|---|
-| 含 `::timestamp` range | 117 | ~245 / 1770（L0≡L1，结构性） | **engine-boundary**：Oracle CBO 单列近唯一时间列 range 估塌 ~400x，column-group/ext 不参与 range(同 `deploy` 引擎边界族)，不可修 |
-| 不含 timestamp range | 63 | 1.65 / 4.61 | 健康、可量化（候选都能实际改进/评估） |
+| 含 `::timestamp` range（`CreationDate/… BETWEEN 或 ≤/≥`） | 117 | ~245 / 1770 | base 级估计偏差；L0≡L1，只与引擎对 range 的估计有关、与采样深度无关 |
+| 不含 timestamp range | 63 | 1.65 / 4.61 | 与原 PG 一样健康、可量化 |
 
-证据要点：好坏被 timestamp-range 100% 切分；`st.129`(users) PG baseline est≈38931(q≈1.0) vs
-Oracle est≈98(q≈399)，同一 `::timestamp` range；L0 与 L1 读数相同；独立两次测量复现。
-（pg 侧 stats_ceb_single 无此问题——PG `mcv`/范围估计正常，故 §4.1 的 PG 语料数字成立。）
+**为什么(机制，基于既有 Oracle 文档与先前探针而非臆测)**：
+1. **Oracle 对范围谓词(BETWEEN/≤/≥)的选择率不走对多列扩展统计/列组的"区间覆盖"，而对近唯一、
+   高基数的时间列(NDV≈行数)缺少能表达"该宽范围实际覆盖整表大半"的分布信息** —— 早先
+   (§6.3d2 系、deploy 引擎边界记录)已确认 Oracle column-group 依文档 principal 主要服务等值/IN，
+   不收敛普通 range；此处下探到单列：即使只问宽时间范围的单列选择性，Oracle 也会按"近唯一值
+   在分布中的占比"得到一个显著偏小的估计。`st.129`(users)：PG 自然基线 est≈38931(q≈1.0)，
+   Oracle est≈98(q≈399)。
+2. **扩展统计(column-group)不参与这类 range** → 无论有无扩展统计该 base 都高、加列组无效。这是
+   Oracle 能力边界，不在本项目"扩展统计选择"覆盖内。
+3. 它发生在**加任何扩展统计之前的自然基线**（干净 SIZE AUTO、无残余列组）→ 不是测量/协议假象。
 
-**对 oracle 该 bench 的 L2/L3 口径**：做 Oracle stats_CEB_single 的优化/部署时，必须以
-**不含 timestamp-range 那 63 条**为可量化分母（或把 117 条标 engine-boundary 单独呈报），
-否则任何 Oracle 均线都会被钉在 ~160 的假基线。分层对照(Oracle vs PG)时此为**引擎不对称项**
-(应写为 Oracle 范围谓词机制边界，而非统计选择失败)。
+**跨世代一致**：`results_archive_pre_sgrid_20260905/per_lambda/stats_ceb_single/oracle`(dense)
+同样：PG mean≈1.34/无>5；Oracle 带 timestamp mean≈296/读数全>5，无 timestamp mean≈1.36/仅9>5。
+即这不是 S-grid 新测量引入，是 Oracle 对该类谓词的长期估计特性(PG `mcv` 对 range 部分参与、无此问题)。
+
+**对本 bench 的 Oracle L2/L3 口径**：Oracle stats_CEB_single 的优化/部署要以**无 timestamp-range 的
+63 条**为可量化分母（117 条单列 range 估计差、非扩列可修 → 单独呈报为引擎/机制注记）。分层对照
+(Oracle vs PG) 时此为**引擎不对称项**：写为 Oracle 对宽时间范围过滤的估计特性边界，而非统计选择失败。
 
 ## 5. candidate-bearing 报告分母
 
@@ -192,8 +204,9 @@ Oracle est≈98(q≈399)，同一 `::timestamp` range；L0 与 L1 读数相同�
 
 - **Oracle**：census、dmv 的 S-grid 已测/进行中分布见上表；Oracle 侧需在单 DB 上
   串行补齐，且 `tiers`/`est%` 按每 owner 表（`table_s_rows`）口径。
-- **Oracle stats_CEB_single = 引擎边界分块（§4.2）**：117 条 timestamp-range 是 Oracle
-  CBO 单列时间列 range 的基线上限，**不可由重测/扩列修复**；其 L2/L3 必须以剔除该 117 的
-  63 条（或不含 timestamp-range 子集）为可信分母，勿把坏块计入 Oracle 均线。
+- **Oracle stats_CEB_single：117 条宽时间范围查询 base 级估计差（§4.2）** ——原因=Oracle 对
+  近唯一时间列 range 的默认选择性估计偏小，且扩展统计(column-group)不参与 range，故**非扩列可修、
+  也非测量问题**（dense 归档同样复现）。其 Oracle L2/L3 应以**无 timestamp-range 的 63 条**为
+  可信分母，勿把 117 条的 base 级偏差计入 Oracle 均线。
 - **λ 待复测项**：本设计在部分 bench 上若需"高 arity / 更深采样"才可修的反例，
   需要额外候选集；现状是 arity-2 + L0/L1 已落地，更高档为下一步（对齐 optimize）。
