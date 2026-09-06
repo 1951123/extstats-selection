@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-CORPUS = ROOT / "results" / "per_lambda"
+CORPUS = ROOT / "results" / "measure"
 DEFAULT_OUT = ROOT / "results" / "e2e_deploy.json"
 
 

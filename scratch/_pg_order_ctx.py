@@ -23,14 +23,14 @@ def load_ctx(level="1", budget=100000):
     from extstats2.bench import load_benchmark
     from extstats2.core.measure_lambda_io import read_query_measure
 
-    meta, blocks = load_lambda_problem(ROOT / "results" / "per_lambda", "census", "postgres")
+    meta, blocks = load_lambda_problem(ROOT / "results" / "measure", "census", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, level, skip_worse_than_baseline=True)
     res = solve_ilp(phys, list(opts), [float(v) for v in qbases], budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,
                     per_query_cap=1, objective="mean")
     chosen_colsets = {tuple(ps.columns): ps.level for ps in res.selected_stats}
     cols_order = sorted(chosen_colsets.keys())
-    corpus = ROOT / "results" / "per_lambda" / "census" / "postgres"
+    corpus = ROOT / "results" / "measure" / "census" / "postgres"
     queries = {q.qid: q for q in load_benchmark("census")}
     qids_all = sorted(queries.keys(), key=lambda x: int(x.split(".")[1]))
     candidx = {}

@@ -1,6 +1,6 @@
 """Optimizer consumer for the per-λ (sampling-first) premeasure output (§7bis).
 
-Reads ``results/per_lambda/<workload>/<backend>/`` (per-query ``by_lambda`` files
+Reads ``results/measure/<workload>/<backend>/`` (per-query ``by_lambda`` files
 + ``_meta.json``) and for each λ tier assembles the *inner* selection problem:
    - per-λ no-ext baseline ``qbase_i = by_lambda[level].baseline.qerror`` (same-S
      reference), and

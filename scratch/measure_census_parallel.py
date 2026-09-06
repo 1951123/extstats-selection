@@ -18,7 +18,7 @@ dir across workers.
 
 Usage::
     python scratch/measure_census_parallel.py --n 8 \
-        --out results/per_lambda/census/postgres \
+        --out results/measure/census/postgres \
         --dbprefix census_m --table .climate --arities 2
 (discard old corpus first; a fresh ``_meta.json`` and 468 ``query.*.json`` land in
 ``--out`` after the run.)

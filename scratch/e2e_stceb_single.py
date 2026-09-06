@@ -38,8 +38,8 @@ def main(level, budget, db, table_for_meta, out, strategy="naive"):
     from extstats2.core.optimize import solve_ilp, OptimizerClass
     from extstats2.backend.base import StatObject
     from extstats2.backend.capabilities import Capacity
-    corpus = ROOT / "results" / "per_lambda" / "stats_ceb_single" / "postgres"
-    meta, blocks = load_lambda_problem(ROOT/"results"/"per_lambda", "stats_ceb_single", "postgres")
+    corpus = ROOT / "results" / "measure" / "stats_ceb_single" / "postgres"
+    meta, blocks = load_lambda_problem(ROOT/"results"/"measure", "stats_ceb_single", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, str(level), skip_worse_than_baseline=True)
     res = solve_ilp(phys, list(opts), [float(v) for v in qbases], budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR, per_query_cap=1, objective="mean")

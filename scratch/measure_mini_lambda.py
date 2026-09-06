@@ -27,6 +27,6 @@ for s in list(be.list_stats(".climate")):
     be.drop_stat(s)
 be._set_all_columns_target(".climate", 100, analyze=True)
 
-base = Path("results/per_lambda/census_mini")
+base = Path("results/measure/census_mini")
 files = sorted(p.name for p in base.glob("*.json")) if base.exists() else []
 print("files written under", base, ":", files)

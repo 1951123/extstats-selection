@@ -6,7 +6,7 @@
 
 链逻辑:
 1) 轮询等待 dmv/postgres 测量完成：`measure_dmv_parallel.py` 主进程结束，
-   且 results/per_lambda/dmv/postgres 下 dmv.*.json 达到预期 candidate-bearing 数
+   且 results/measure/dmv/postgres 下 dmv.*.json 达到预期 candidate-bearing 数
    (1926)，持续若干秒稳定即判定完成（resumable：即便少几条也会被 census 前重跑兜住）。
 2) dmv 完成后自检 census_m1..m8 镜像库存在、census/postgres 目录可写。
 3) 用 subprocess.Popen 分离启动 census/PG 并行测量(8 mirror)，
@@ -23,8 +23,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DMV_DIR = ROOT / "results" / "per_lambda" / "dmv" / "postgres"
-CENSUS_DIR = ROOT / "results" / "per_lambda" / "census" / "postgres"
+DMV_DIR = ROOT / "results" / "measure" / "dmv" / "postgres"
+CENSUS_DIR = ROOT / "results" / "measure" / "census" / "postgres"
 LOG_DIR = ROOT / "scratch" / "logs_sgrid"
 DMV_EXPECTED = 1926           # dmv candidate-bearing (arity-2)
 CENSUS_EXPECTED = 467         # census candidate-bearing (arity-2); census 总 468 但 1 条 no-cand
@@ -99,7 +99,7 @@ def main() -> None:
     cmd = [str(ROOT / ".venv" / "bin" / "python"), "-u",
            str(ROOT / "scratch" / "measure_census_parallel.py"),
            "--n", "8",
-           "--out", str(ROOT / "results" / "per_lambda"),
+           "--out", str(ROOT / "results" / "measure"),
            "--dbprefix", "census_m", "--bench", "census",
            "--table", ".climate", "--arities", "2",
            "--levels", "0", "1"]

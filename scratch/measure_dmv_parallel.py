@@ -17,10 +17,10 @@ Usage::
     # create mirrors first, e.g. from the loaded `dmv` db:
     #   for i in 1..N: CREATE DATABASE dmv_m$i TEMPLATE dmv
     python scratch/measure_dmv_parallel.py --n 8 \\
-        --out results/per_lambda \\
+        --out results/measure \\
         --dbprefix dmv_m --bench dmv \\
         --table .dmv --arities 2 --levels 0 1
-(discard a stale corpus under results/per_lambda/dmv/postgres first.)
+(discard a stale corpus under results/measure/dmv/postgres first.)
 """
 from __future__ import annotations
 
@@ -98,7 +98,7 @@ def _worker(args: dict) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=8)
-    ap.add_argument("--out", default=str(ROOT / "results" / "per_lambda"))
+    ap.add_argument("--out", default=str(ROOT / "results" / "measure"))
     ap.add_argument("--dbprefix", default="dmv_m")
     ap.add_argument("--table", default=".dmv")
     ap.add_argument("--arities", type=int, nargs="+", default=[2])

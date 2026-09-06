@@ -33,7 +33,7 @@ conservatively).
 
 Usage (PG census)::
     python scratch/measure_pad_params.py postgres \
-        --out results/per_lambda/census/postgres --table .climate --add-params 10 100
+        --out results/measure/census/postgres --table .climate --add-params 10 100
 Writes: back-merged <qid>.json with absent params appended (tagged ``pad:true``),
 and recomputes _meta.param_tiers to reflect the actual coverage grid.
 """

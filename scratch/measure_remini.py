@@ -9,7 +9,7 @@ derived) plus any empirically-confirmed driver pair, so the per-lambda data show
 real (driver) q-error movement rather than decoy-flat readings.
 
 Usage: measure_remini.py <backend: postgres|oracle>
-Writes results/per_lambda/census_mini/<backend>/.
+Writes results/measure/census_mini/<backend>/.
 """
 import sys
 from pathlib import Path
@@ -69,4 +69,4 @@ for s in list(be.list_stats(".climate")):
     be.drop_stat(s)
 if backend_name == "postgres":
     be._set_all_columns_target(".climate", 100, analyze=True)
-print(f"[{backend_name}] DONE -> results/per_lambda/census_mini/{backend_name}/")
+print(f"[{backend_name}] DONE -> results/measure/census_mini/{backend_name}/")

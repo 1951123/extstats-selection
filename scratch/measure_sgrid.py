@@ -4,7 +4,7 @@
 {100,1000}) and Oracle (per-table estimate_percent from S) now realize the SAME
 per-table S points in their backends. This driver measures every query of a
 benchmark at the S-grid levels (default 0,1) for one backend, writing one JSON
-per query under ``results/per_lambda/<bench>/<backend>/``.
+per query under ``results/measure/<bench>/<backend>/``.
 
 Driver strategy (chooses the backend's own measure path automatically):
   - ``measure_query_lambda_m`` dispatches: PG (catalog-mask capable) -> the

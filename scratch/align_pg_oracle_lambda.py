@@ -2,7 +2,7 @@
 
 Same workload name/query picks/candidate set as the existing PG census_mini run
 (scratch/measure_mini_lambda.py) so the two land under:
-    results/per_lambda/census_mini/<postgres|oracle>/<qid>.json (+ _meta.json)
+    results/measure/census_mini/<postgres|oracle>/<qid>.json (+ _meta.json)
 
 Note: the two engines realize an "abstract λ level" differently and the S_rows
 per level differ (~20% at L0/L1) because PG sets target -> minrows=300*target

@@ -2,7 +2,7 @@
 
 One runner, one JSON schema, for both budget kinds, over all three benches
 (census=climate, dmv=dmv single-table; stats_ceb_single multi-table) and either
-backend (postgres|oracle; corpus per results/per_lambda/{bench}/{backend}/).
+backend (postgres|oracle; corpus per results/measure/{bench}/{backend}/).
 
 JSON (one file per backend+bench+budget kind):
   {
@@ -180,7 +180,7 @@ def main():
             "maint+oracle not wired yet: the maint cost legs here are PG-modeled "
             "(PG ANALYZE fixed/var). Oracle maint must consume "
             "oracle.table_maintain_tiers/stat_maintain_var; run storage first.")
-    blocks = load_lambda_problem(ROOT / "results" / "per_lambda", bench,
+    blocks = load_lambda_problem(ROOT / "results" / "measure", bench,
                                  backend)[1]
 
     baseline, per_level = {}, {}

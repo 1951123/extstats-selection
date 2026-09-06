@@ -1,6 +1,6 @@
 """208-query PG census per-lambda view: baseline & best-candidate qerror by λ."""
 import glob, json, numpy as np
-files = sorted(glob.glob('results/per_lambda/census/postgres/query.*.json'))
+files = sorted(glob.glob('results/measure/census/postgres/query.*.json'))
 rows=[]
 for f in files:
     d=json.load(open(f)); qid=d['qid']; act=d['actual']

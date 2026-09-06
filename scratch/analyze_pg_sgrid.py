@@ -6,7 +6,7 @@ bound), improveable count, heavy-tail / 2-col-unrepairable counts, and physical
 (colset,param) scope — all over the **candidate-bearing query set** denominator
 (see docs/reporting-convention.md).
 
-Corpus : results/per_lambda/<bench>/postgres/  (census=query.*, stats_ceb_single
+Corpus : results/measure/<bench>/postgres/  (census=query.*, stats_ceb_single
          =st.*, dmv=dmv.*) — S-grid levels {0,1}.
 Output : results/report_pg_sgrid_3bench.json  (writes it) + console table.
 
@@ -127,7 +127,7 @@ def main():
                         "(see docs/reporting-convention.md)",
               "benches": {}}
     for bench in BENCHES:
-        d = ROOT / "results" / "per_lambda" / bench / "postgres"
+        d = ROOT / "results" / "measure" / bench / "postgres"
         rep = analyze_bench(bench, d)
         report["benches"][bench] = rep
         print("=" * 74)

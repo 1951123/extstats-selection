@@ -1,6 +1,6 @@
 """A/B: Oracle AUTO_SAMPLE_SIZE (full-scan) vs our 1% ladder-L0, per query.
 
-The 1% corpus (results/per_lambda/census/oracle/*.json) measured each candidate
+The 1% corpus (results/measure/census/oracle/*.json) measured each candidate
 at estimate_percent=1. Probe above showed AUTO_SAMPLE_SIZE => 100% (full scan)
 on Oracle for these tables, and that 1% is a *smaller* effective sample on the
 big CLIMATE table (24.7K rows, no colgroup histogram for CASEID,DAGE) while
@@ -49,7 +49,7 @@ def ladder_for(ep: float) -> dict:
 
 
 def load_1pct(qid):
-    f = Path("results/per_lambda/census/oracle") / (qid + ".json")
+    f = Path("results/measure/census/oracle") / (qid + ".json")
     if not f.exists():
         return None
     d = json.load(open(f))

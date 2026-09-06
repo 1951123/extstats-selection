@@ -30,8 +30,8 @@ def main(level: str, budget: int, db: str, table: str, deploy: bool, out: Path):
     from extstats2.bench import load_benchmark
     from extstats2.core.measure_lambda_io import read_query_measure
 
-    corpus = ROOT / "results" / "per_lambda" / "census" / "postgres"
-    meta, blocks = load_lambda_problem(ROOT / "results" / "per_lambda", "census", "postgres")
+    corpus = ROOT / "results" / "measure" / "census" / "postgres"
+    meta, blocks = load_lambda_problem(ROOT / "results" / "measure", "census", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, level, skip_worse_than_baseline=True)
     qb = [float(v) for v in qbases]
     res = solve_ilp(phys, opts, qb, budget,

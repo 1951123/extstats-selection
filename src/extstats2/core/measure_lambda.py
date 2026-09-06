@@ -282,10 +282,10 @@ def measure_workload_lambda(
     use_protocol_m: bool = False,
     skip_existing: bool = True,
 ) -> None:
-    """Measure a workload into ``<outdir>/per_lambda/<workload>/``.
+    """Measure a workload into ``<outdir>/measure/<workload>/``.
 
     Writes ``_meta.json`` + one ``<qid>.json`` per query, namespaced by workload
-    and backend (``<outdir>/per_lambda/<workload>/<backend>/``) so neither workload
+    and backend (``<outdir>/measure/<workload>/<backend>/``) so neither workload
     nor DBMS engine (which may hold the same columns but different native params)
     collide. ``param_tiers=None`` records the active backend's own representation
     grid; levels default to :data:`DEFAULT_LAMBDA_LEVELS` (L2 off). When

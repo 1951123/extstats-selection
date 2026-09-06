@@ -6,7 +6,7 @@ Protocol-A measurement, run on Oracle — using measurement that already exists
 
 Flow (models e2e_deploy_census.py but for Oracle's Protocol-A / column-group
 deployment, no catalog-mask, no OID/FB ordering — those are PG-only):
-  1. Load the existing Oracle per-λ corpus ``results/per_lambda/census_mini/oracle``
+  1. Load the existing Oracle per-λ corpus ``results/measure/census_mini/oracle``
      and build the INNER selection problem at a λ level (skip_worse_than_baseline
      only) -> solve under a storage budget -> ``selected_stats`` (colset at its
      chosen representation param) + per-query predicted q-error (model value).
@@ -34,7 +34,7 @@ import numpy as np
 sys.path.insert(0, "src")
 
 ROOT = Path(__file__).resolve().parents[1]
-CORPUS = ROOT / "results" / "per_lambda"
+CORPUS = ROOT / "results" / "measure"
 WORKLOAD = "census_mini"      # existing Oracle-measured 3-query corpus
 BACKEND = "oracle"
 OR = dict(host="localhost", port=1521, user="SYSTEM",

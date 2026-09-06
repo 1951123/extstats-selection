@@ -26,7 +26,7 @@ def main():
     be = get_backend("postgres", cfg=DBConfig(host="localhost", port=5432,
                      user="postgres", password="postgres", dbname=a.db))
     Q = {q.qid: q for q in load_benchmark("stats_ceb_single")}
-    dest = result_dir(Path(a.out or (ROOT / "results" / "per_lambda")), "stats_ceb_single", "postgres")
+    dest = result_dir(Path(a.out or (ROOT / "results" / "measure")), "stats_ceb_single", "postgres")
     dest.mkdir(parents=True, exist_ok=True)
     # write meta once (levels)
     table_src = ".posts"   # representative for meta numbers
