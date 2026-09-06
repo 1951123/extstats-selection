@@ -105,16 +105,23 @@ DEFAULT_CAPACITY_LADDER = {
     1: {"s_rows": 300000, "buckets": 254},
 }
 
-# FIXED per-table gather cost (one shared scan), seconds, indexed by S-grid
-# level (ladder {0,1}). Calibrated 2026-09-02 on Census CLIMATE (~2.46M rows),
-# degree 1: sampling S_rows rows costs a GATHER whose time scales with the
-# realized percent S/N:
-#   L0 = 30000 rows   (~1.2% of CLIMATE) -> 0.54s
-#   L1 = 300000 rows  (~12%  of CLIMATE) -> 2.10s
-# (The old fixed-% ladder's 100% tier = 21.7s is gone: the S-grid never
-# realizes a full scan on large tables, so its entry was dead once the ladder
-# dropped to 2 levels and is removed.)
-_FIXED_TIER_S = (0.54, 2.10)
+# Gather-time calibration for a column-group GATHER (one shared scan), degree 1,
+# measured 2026-09-02 on Census CLIMATE (~2.46M rows). The GATHER samples
+# S_rows rows (per the sampling knob); measured one-refresh seconds:
+#   L0 -> S=30000  rows -> 0.54s
+#   L1 -> S=300000 rows -> 2.10s
+# Fit an *affine-in-sampled-rows* model cost = base + rate*S. Solving the two
+# points gives
+#   rate = (2.10-0.54)/(300000-30000) ~ 5.778e-6 s/row,
+#   base = 0.54 - rate*30000          ~ 0.3667 s.
+# Scaling with rows actually read is S-grid-consistent: a GATHER samples
+# min(S, N) rows and costs the same on any table with N >= S (CLIMATE and an
+# 11.6M-row DMV both read 30k/300k rows -> ~0.54s/~2.10s), only shrinking on
+# tables small enough that the level caps at a full scan (N < S). This replaces
+# an earlier model that multiplied by N/2.46M, which wrongly billed large tables
+# by their total size even though they sample no more rows.
+_GATHER_BASE_S = 0.366667
+_GATHER_RATE_S_PER_ROW = 5.7778e-6
 # Marginal per-statistic component: negligible for column groups sharing a scan
 # (FIXED_ONLY). Kept tiny so the per-stat model still reports a nonzero cost.
 _VAR_PER_STAT_S = 0.002
@@ -573,16 +580,26 @@ class OracleBackend(Backend):
     # -- maintenance cost ---------------------------------------------------
 
     def table_maintain_tiers(self, table: str) -> tuple[float, ...]:
-        """Fixed one-refresh GATHER cost per tier (shared scan), seconds."""
-        scale = self._relrows_scale(table)
-        n = max(self._ladder) + 1 if self._ladder else max(len(_FIXED_TIER_S), 1)
+        """Fixed one-refresh GATHER cost per S-grid tier on ``table`` (seconds).
+
+        A GATHER samples ``S_realized = min(S_rows_target(level), N)`` rows on
+        ``table`` (S-grid semantics), so the cost is affine in the rows actually
+        read: ``base + rate * S_realized``. Table-dependence enters *only*
+        through S_realized — NOT through total N — so large tables that sample
+        the same S rows cost the same (CLIMATE & an 11.6M-row DMV both read
+        30k/300k rows -> ~0.54s / ~2.10s). Monotone increasing in level, since
+        S_realized is non-decreasing in level.
+        """
+        if not self._ladder:
+            # defensive: no ladder -> report the two CLIMATE calibration points
+            return (_GATHER_BASE_S + _GATHER_RATE_S_PER_ROW * 30000.0,
+                    _GATHER_BASE_S + _GATHER_RATE_S_PER_ROW * 300000.0)
+        n = self._num_rows(table)
         out = []
-        for lvl in range(n):
-            if lvl not in self._ladder:
-                out.append(out[-1] if out else 0.0)
-                continue
-            idx = min(lvl, len(_FIXED_TIER_S) - 1)
-            out.append(_FIXED_TIER_S[idx] * scale)
+        for lvl in sorted(self._ladder):
+            s_target = self._s_rows_target(lvl)
+            s_realized = min(s_target, n) if n and n > 0 else s_target
+            out.append(_GATHER_BASE_S + _GATHER_RATE_S_PER_ROW * s_realized)
         return tuple(out)
 
     def stat_maintain_var(self, obj: StatObject) -> float:
@@ -621,23 +638,6 @@ class OracleBackend(Backend):
             return float(row[0]) if row and row[0] else 0.0
         except Exception:
             return 0.0
-
-    def _relrows_scale(self, table: str) -> float:
-        """Scale factor vs the calibration table (CLIMATE ~2.46M rows)."""
-        tname = self._q_table(table)
-        try:
-            with self._cur() as cur:
-                cur.execute(
-                    "SELECT num_rows FROM user_tables WHERE table_name=:t",
-                    {"t": tname})
-                row = cur.fetchone()
-            n = float(row[0]) if row and row[0] else 0.0
-        except Exception:
-            return 1.0
-        if n <= 0:
-            return 1.0
-        # floor so tiny tables don't collapse to ~0
-        return max(0.1, n / 2_460_000.0)
 
 
 def _text(value) -> str:
