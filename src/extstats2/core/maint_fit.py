@@ -88,22 +88,22 @@ def _probe_stat(backend: Backend, table: str, level: int, c0: str, c1: str,
         name=f"__ext_maint_{_table_sql(table)}_{level}_{idx}")
 
 
-def _time_analyze(backend: PostgresBackend, table: str, repeats: int) -> float:
-    """Median wall-seconds of a bare ``ANALYZE table`` (single-columns already in
-    the λ-state). Kept free of DDL so it measures the recurring scan itself.
-
-    One UNTIMED warmup ANALYZE runs first so the first timed repeat is not paying
-    cold-cache/catalog loads (which otherwise inflate the fixed estimate).
-    """
+def _time_analyze_once(backend: PostgresBackend, table: str) -> float:
+    """One bare ``ANALYZE table`` wall-seconds (single cols already in the λ-state).
+    Free of DDL — measures the recurring maintenance scan itself."""
     tn = _table_sql(table)
-    times: list[float] = []
     with backend.conn.cursor() as cur:
-        cur.execute(f"ANALYZE {tn}")   # warmup (untimed)
-        for _ in range(repeats):
-            t0 = time.perf_counter()
-            cur.execute(f"ANALYZE {tn}")
-            times.append(time.perf_counter() - t0)
-    return _median(times)
+        t0 = time.perf_counter()
+        cur.execute(f"ANALYZE {tn}")
+        return time.perf_counter() - t0
+
+
+#: Minimum per-stat marginal we treat as resolvable (sec). When the measured
+#: paired delta is *below* this (sub-noise), we store this floor instead of a
+#: hard 0, because a per-extstat marginal can never be ≤ 0 physically and a 0
+#: would silently zero out the maintenance-var term. Calibrated as a conservative
+#: fraction of the PG closed-form L1 marginal (~0.02) — a low but non-zero bound.
+_CVAR_FLOOR = 0.005
 
 
 def measure_table_maintenance_pg(backend: PostgresBackend, table: str, level: int,
@@ -113,35 +113,51 @@ def measure_table_maintenance_pg(backend: PostgresBackend, table: str, level: in
                                  ) -> tuple[float, float]:
     """Measure ``(fixed, c_var)`` seconds for one PG ``table`` at λ ``level``.
 
-    ``analyze_only=True`` skips the DDL/setup (assumes the λ-state is already
-    established and no probe stats are present) — used internally by
-    :func:`fit_pg_bench` to avoid re-ALTERing between repeats across tables.
+    ``fixed``  = median of ``repeats`` BARE ``ANALYZE`` runs (single columns at the
+    λ target ``S/300``, no ext stat) = one-refresh shared-scan seconds.
+
+    ``c_var``  = the per-extstat marginal, resolved by PAIRED per-round deltas:
+    each round times a bare ANALYZE then an ANALYZE carrying ``k`` probe column-group
+    stats back-to-back (same cache state, cancelling slow drift); c_var = median
+    of ``repeats`` deltas / ``k``. A paired delta is far more robust than subtracting
+    two separately-medianed runs, which under drifts clamps a real small marginal
+    to 0. A sub-noise positive delta is floored to :data:`_CVAR_FLOOR` (a per-stat
+    marginal is never ≤ 0; a hard 0 would silently zero the maintenance-var term).
     """
     tgt = backend._target_for_level(table, level)
     if tgt is None:
         raise KeyError(f"level {level} not realised on {table!r}")
     if not analyze_only:
         backend.enter_lambda_state(table, level)
-    fixed = _time_analyze(backend, table, repeats)
 
     c0, c1 = _regular2(table, backend)
     objs = [_probe_stat(backend, table, level, c0, c1, i) for i in range(k)]
-    # DDL (create + set targets) is UNTIMED; the timed op is the single shared
-    # ANALYZE that maintains the k stats afterwards.
     for o in objs:
         backend.create_stat(o)
     try:
         param = max(1, int(tgt))
         with backend.conn.cursor() as cur:
             for o in objs:
-                cur.execute(
-                    f"ALTER STATISTICS \"{o.name}\" SET STATISTICS {param}")
-        # timed: one ANALYZE maintaining all k stats in the shared scan
-        t_with_k = _time_analyze(backend, table, repeats)
+                cur.execute(f"ALTER STATISTICS \"{o.name}\" SET STATISTICS {param}")
+        # warm once so the first paired round is not cold
+        _time_analyze_once(backend, table)
+        bare_times: list[float] = []
+        deltas: list[float] = []
+        for _ in range(repeats):
+            bare = _time_analyze_once(backend, table)
+            with_k = _time_analyze_once(backend, table)  # maintains all k stats
+            bare_times.append(bare)
+            deltas.append(with_k - bare)
+        fixed = _median(bare_times)
+        per_stat = (_median(deltas)) / k
     finally:
         for o in objs:
             backend.drop_stat(o)
-    return fixed, max(0.0, (t_with_k - fixed)) / k
+    if per_stat <= 0:
+        # measured delta at/below noise floor: physically a stat marginal is > 0,
+        # so keep a low floor rather than emit a hard 0.
+        per_stat = _CVAR_FLOOR
+    return fixed, per_stat
 
 
 def fit_pg_bench(bench: str, pgdb: str, owner_tables: Sequence[str],
