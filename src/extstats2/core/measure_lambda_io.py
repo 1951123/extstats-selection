@@ -11,10 +11,11 @@ Storage is **one JSON file per query** (decoupled production, incremental
 re-runs, parallel-safe), plus a single root ``_meta.json`` carrying the shared
 lambda-tier definitions (backend-agnostic level → S_rows/single_target).
 
-Output layout under a results root ``outdir``::
+Output layout under a results root ``outdir`` (the corpus dir is
+``CORPUS_SUBDIR``, currently "per_lambda"; see constant note)::
 
     outdir/
-      per_lambda/
+      per_lambda/              # == CORPUS_SUBDIR (rename target: "measure")
         <workload>/             # one dir per workload
           <backend>/            # one dir per DBMS engine (PG/Oracle ...)
             _meta.json          # workload/backend + lambda tier + param grid
@@ -27,6 +28,14 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+# Name of the per-query by_lambda corpus directory *inside* a results root.
+# Currently "per_lambda" (kept so the in-flight background dmv/oracle measure
+# keeps writing to the same path). Once that corpus completes, switch to
+# "measure" and `mv results/per_lambda results/measure` in one shot; every
+# coroutine reader must resolve the corpus via result_dir / load_lambda_problem
+# (NOT hand-written "per_lambda" strings) so the rename is a single flip.
+CORPUS_SUBDIR = "per_lambda"
 
 
 # ---------------------------------------------------------------------------
@@ -84,16 +93,18 @@ class Meta:
 def result_dir(outdir: Path, workload: str, backend: str) -> Path:
     """Directory for one (workload, backend)'s per-λ results.
 
-    Layout: ``outdir/per_lambda/<workload>/<backend>/`` when ``outdir`` is the
+    Layout: ``outdir/<CORPUS_SUBDIR>/<workload>/<backend>/`` when ``outdir`` is the
     results root (e.g. ``results``), or ``outdir/<workload>/<backend>/`` when
-    ``outdir`` already points at ``per_lambda``. Two layers keep
-    (a) different workloads and (b) different DBMS engines (which may hold the
-    same column names but different native params/kinds) from ever colliding.
+    ``outdir`` already points at the corpus dir (e.g. ``.../<CORPUS_SUBDIR>``).
+    Two layers keep (a) different workloads and (b) different DBMS engines (which
+    may hold the same column names but different native params/kinds) from ever
+    colliding. ``CORPUS_SUBDIR`` is "per_lambda" while the in-flight background
+    measure runs; flip it to "measure" (plus one ``mv``) after that corpus lands.
     """
     base = Path(outdir)
-    if base.name == "per_lambda":
+    if base.name == CORPUS_SUBDIR:
         return base / workload / backend
-    return base / "per_lambda" / workload / backend
+    return base / CORPUS_SUBDIR / workload / backend
 
 
 def write_meta(outdir: Path, meta: Meta) -> Path:
