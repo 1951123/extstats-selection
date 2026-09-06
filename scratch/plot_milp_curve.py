@@ -1,8 +1,8 @@
 """Unified figure for the unified MILP "budget vs quality" json.
 
-Reads results/milp_{storage,maint}_sgrid_{bench}.json (the schema written by
-scratch/measure_milp_curve.py) for bench in {census, stats_ceb_single, dmv} and
-emits one figure per budget kind.
+Reads results/curves/{backend}/milp_{storage,maint}_sgrid_{bench}.json (the
+schema written by scratch/measure_milp_curve.py) for bench in {census,
+stats_ceb_single, dmv} and emits one figure per budget kind.
 
 Per kind: 3(bench) x 2(metric mean|geo) panel.
   * L0 (blue) and L1 (red) deployed curves (from per_level), markers.
@@ -11,9 +11,10 @@ Per kind: 3(bench) x 2(metric mean|geo) panel.
   * baseline per level as dashed horizontal line.
   x-axis budget (storage: log-bytes; maint: seconds); y mean-panel log scale,
     geo-panel linear.
-Output: results/figures/milp_curve_storage.png, milp_curve_maint.png
+Output: results/figures/milp_curve_{kind}_{backend}.png
 Usage:
-  .venv/bin/python -u scratch/plot_milp_curve.py
+  .venv/bin/python -u scratch/plot_milp_curve.py             # PG
+  .venv/bin/python -u scratch/plot_milp_curve.py --backend oracle
 """
 from __future__ import annotations
 import json, math
@@ -33,25 +34,31 @@ KIND = {"storage": {"unit": "bytes", "xlog": True, "xticks": [2000, 10000, 50000
         "maint":  {"unit": "seconds/refresh", "xlog": False}}
 
 
-def load(bench, kind):
-    return json.loads((ROOT / "results" / f"milp_{kind}_sgrid_{bench}.json").read_text())
+def load(bench, kind, backend):
+    return json.loads((ROOT / "results" / "curves" / backend /
+                       f"milp_{kind}_sgrid_{bench}.json").read_text())
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--backend", default="postgres",
+                    choices=["postgres", "oracle"])
+    b = ap.parse_args().backend
     FIGDIR.mkdir(parents=True, exist_ok=True)
     for kind, k in KIND.items():
         data = {}
-        for b in BENCHES:
-            d = load(b, kind)
-            data[b] = {"baseline": d["baseline"], "per_level": d["per_level"],
-                       "argmin": d["argmin_over_level"]}
+        for bench in BENCHES:
+            d = load(bench, kind, b)
+            data[bench] = {"baseline": d["baseline"], "per_level": d["per_level"],
+                           "argmin": d["argmin_over_level"]}
         fig, axes = plt.subplots(3, 2, figsize=(11, 10))
-        for i, b in enumerate(BENCHES):
-            bl = data[b]["baseline"]
+        for i, bench in enumerate(BENCHES):
+            bl = data[bench]["baseline"]
             for j, metric in enumerate(["mean", "geo"]):
                 ax = axes[i][j]
                 for lv in ("0", "1"):
-                    rows = data[b]["per_level"][lv]
+                    rows = data[bench]["per_level"][lv]
                     xs = [r["budget"] for r in rows]
                     ys = [r.get(metric) for r in rows]
                     ax.plot(xs, ys, "-o", color=C[lv], ms=4, lw=1.4,
@@ -67,12 +74,12 @@ def main():
                     ax.set_yscale("log")
                 ax.set_xlabel(f"budget ({k['unit']})")
                 ax.set_ylabel(metric)
-                ax.set_title(f"{BENCH_LABEL[b]} — {metric}")
+                ax.set_title(f"{BENCH_LABEL[bench]} — {metric}")
                 ax.grid(True, which="both", alpha=0.3)
                 ax.legend(fontsize=6.5)
-        fig.suptitle(f"Unified MILP — {kind} budget")
+        fig.suptitle(f"Unified MILP — {kind} budget [{b}]")
         fig.tight_layout(rect=[0, 0, 1, 0.97])
-        out = FIGDIR / f"milp_curve_{kind}.png"
+        out = FIGDIR / f"milp_curve_{kind}_{b}.png"
         fig.savefig(out, dpi=150)
         print("wrote", out)
         plt.close(fig)

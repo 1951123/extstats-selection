@@ -2,7 +2,8 @@
 
 > 本文档记录**测好之后怎么选**：把 query-level 测量合成为选择问题、给出
 > storage / maint 两套 budget 轴下的质量曲线与"该选 L0/L1、该投多大预算"的
-> 派生结论。数值来自 `results/milp_{storage,maint}_sgrid_<bench>.json`。
+> 派生结论。数值来自 `results/curves/postgres/milp_{storage,maint}_sgrid_<bench>.json`
+> （**PG 版**；Oracle 语料就绪时同构落于 `results/curves/oracle/`，见 `measure.md` 引擎口径）。
 > 语料见 [`measure.md`](measure.md)；设计模型见 [`architecture.md`](architecture.md)。
 
 ## 1. 优化问题（结合 measure 的口径）
@@ -104,7 +105,7 @@ $$
 单表子计划本就健康（~1.3）——扩列收益空间小，这正是其 E2E 里"加扩展几乎不改计划"
 的源头（其真实误差主源在多表 join，不在此 bench 的选择谓词，见 deploy）。
 
-## 3. storage 曲线（`results/milp_storage_sgrid_<bench>.json`）
+## 3. storage 曲线（`results/curves/postgres/milp_storage_sgrid_<bench>.json`）
 
 高 budget（~400 KB）时各档可达：
 
@@ -124,7 +125,7 @@ $$
 - **stats_ceb_single**：从 1.3 → ~1.08，绝对收益小，因本 bench selection 误差本不
   重。
 
-## 4. maint 曲线（`results/milp_maint_sgrid_<bench>.json`，unit=seconds-per-refresh）
+## 4. maint 曲线（`results/curves/postgres/milp_maint_sgrid_<bench>.json`，unit=seconds-per-refresh）
 
 `fixed_sec` = 每表刷新一次的固定门槛（census/dmv：L0=0.256s、L1=2.56s；
 stats_ceb_single 无 fixed 固定，即无 per-table cost 序列）。≤8 s 内各档：

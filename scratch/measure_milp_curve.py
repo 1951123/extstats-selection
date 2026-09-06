@@ -1,9 +1,10 @@
-"""Unified MILP "budget vs quality" sweep over the PG S-grid corpora.
+"""Unified MILP "budget vs quality" sweep over the S-grid corpora (per backend).
 
 One runner, one JSON schema, for both budget kinds, over all three benches
-(census=climate, dmv=dmv single-table; stats_ceb_single multi-table).
+(census=climate, dmv=dmv single-table; stats_ceb_single multi-table) and either
+backend (postgres|oracle; corpus per results/per_lambda/{bench}/{backend}/).
 
-JSON (one file per bench+budget kind):
+JSON (one file per backend+bench+budget kind):
   {
     "bench", "backend":"postgres",
     "budget": {"kind":"storage"|"maint","unit":"bytes"|"seconds-per-refresh"},
@@ -16,17 +17,20 @@ JSON (one file per bench+budget kind):
     "argmin_over_level": [ {budget, choose_level, mean, geo, max, n_selected,
                             stored_bytes, maint_sec} ... ]      # cross-level min
   }
-File: results/milp_{storage|maint}_sgrid_{bench}.json
+File: results/curves/{backend}/milp_{storage|maint}_sgrid_{bench}.json
 
 All solves: cap=1 one-stat, SPARSE_LINEAR, objective=mean, candidate-bearing set.
   storage : budget = stored-bytes cap (maint unconstrained).
   maint   : budget = refresh-seconds; per refresh each ACTIVATED table pays its
-            fixed shared-scan ANALYZE once + per-stat var.
+            fixed shared-scan cost once + per-stat var. [PG-modelled; maint on
+            oracle is not wired yet — the runner refuses it.]
             - census/dmv single table: fixed[lv] + additive var <= M.
             - stats_ceb_single: per-active-table enumeration (storage unconstrained).
-Usage:
+Usage (default backend=postgres):
   .venv/bin/python -u scratch/measure_milp_curve.py --kind storage --bench dmv \
       --grid 2000,5000,20000,50000,100000,200000,400000
+  .venv/bin/python -u scratch/measure_milp_curve.py --kind storage --bench stats_ceb_single \
+      --backend oracle --grid 2000,5000,20000,50000,100000,200000,400000
   .venv/bin/python -u scratch/measure_milp_curve.py --kind maint --bench census \
       --grid 0.1,0.2,0.3,0.5,1.0,2.0,3.0,4.0,6.0,8.0
 """
@@ -166,12 +170,18 @@ def main():
     ap.add_argument("--kind", required=True, choices=["storage", "maint"])
     ap.add_argument("--bench", required=True,
                     choices=["census", "dmv", "stats_ceb_single"])
+    ap.add_argument("--backend", default="postgres", choices=["postgres", "oracle"])
     ap.add_argument("--grid", required=True)
     a = ap.parse_args()
     grid = [float(x) for x in a.grid.split(",") if x.strip()]
-    kind, bench = a.kind, a.bench
+    kind, bench, backend = a.kind, a.bench, a.backend
+    if kind == "maint" and backend == "oracle":
+        raise SystemExit(
+            "maint+oracle not wired yet: the maint cost legs here are PG-modeled "
+            "(PG ANALYZE fixed/var). Oracle maint must consume "
+            "oracle.table_maintain_tiers/stat_maintain_var; run storage first.")
     blocks = load_lambda_problem(ROOT / "results" / "per_lambda", bench,
-                                 "postgres")[1]
+                                 backend)[1]
 
     baseline, per_level = {}, {}
     for lv in ("0", "1"):
@@ -208,12 +218,15 @@ def main():
         argmin.append(row)
 
     unit = "bytes" if kind == "storage" else "seconds-per-refresh"
-    out = {"bench": bench, "backend": "postgres",
+    out = {"bench": bench, "backend": backend,
            "budget": {"kind": kind, "unit": unit},
            "levels": ["0", "1"], "baseline": baseline,
            "fixed_sec": (SINGLE_FIXED if (kind == "maint" and bench != "stats_ceb_single") else None),
            "per_level": per_level, "argmin_over_level": argmin}
-    of = ROOT / "results" / f"milp_{kind}_sgrid_{bench}.json"
+    # Per-backend subtree (PG and Oracle curves never collide):
+    odir = ROOT / "results" / "curves" / backend
+    odir.mkdir(parents=True, exist_ok=True)
+    of = odir / f"milp_{kind}_sgrid_{bench}.json"
     of.write_text(json.dumps(out, indent=1))
 
     print(f"{bench} / {kind} (unit={unit})")
