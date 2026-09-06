@@ -7,11 +7,9 @@
 
 ## 1. 优化问题（结合 measure 的口径）
 
-**优化问题（结合 measure 的口径）。** 与 architecture §2 的方法一致：把 query-level 预测量
-合成为"选统计"的 MILP；模型/匹配细节不是"沿用 architecture"（那边只给机制/动机，不给可沿用
-的模型体），真正的符号、决策变量与约束形式化**就在本文 §1.1/§1.2** 落地。此处概览如下：
-目标 =（candidate-bearing 分母下）最小化平均 q-error；决策 = 创建哪些 (列组,cap) $y$ +
-每条 query 用哪个 $x$；约束是列不重叠稀疏、已创建才可选、以及一条 budget。budget 有两条正交轴：
+沿用 architecture §2 的 MILP：目标 =（candidate-bearing 分母下）minimize 平均
+q-error；决策 = 创建哪些 (列组,cap) $y$ + 每条 query 用哪个 $x$；约束是列不重叠
+稀疏、已创建才可选、以及一条 budget。budget 有两条正交轴：
 
 - **storage**（`unit=bytes`）：统计对象占用；
 - **maint**（`unit=seconds-per-refresh`）：部署后刷新一次的总代价，由**表激活固定
