@@ -144,11 +144,18 @@ def read_query_measure(outdir: Path, qid: str) -> Optional[dict]:
 
 
 def list_qids(outdir: Path) -> list[str]:
+    """Query qids in a corpus dir, excluding non-query JSON artifacts.
+
+    Skips ``_meta.json`` (workload/backend meta) and ``_maint.json`` (fitted
+    maintenance params — see :mod:`extstats2.core.maint_model`), so a
+    maintenance-artifact file is never mistaken for a query result.
+    """
     outdir = Path(outdir)
     if not outdir.exists():
         return []
+    skip = {"_meta", "_maint"}
     return sorted(
-        p.stem for p in outdir.glob("*.json") if p.stem != "_meta"
+        p.stem for p in outdir.glob("*.json") if p.stem not in skip
     )
 
 
