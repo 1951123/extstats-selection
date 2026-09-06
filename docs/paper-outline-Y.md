@@ -45,6 +45,23 @@
 - 报告口径:**geo(主)+ p90/max(尾)+ 可选事后算术**;两个 model class(cap=1/cap-free)必须在
   **同一 geo 口径**下比较(否则如 2KB 假交叉,源自把一个输出量(算术)拿去比一个 geo 优化模型)。
 
+**报告分母口径(Reporting denominator)——已定 2026-09-06:** 所有 workload 级 mean(e.g. baseline/
+deployed 算术 mean、geo、p90/max、n_unrepaired)统一以 **candidate-bearing(arity-2,有相关候选)的查询集合**
+为分母(以语料目录中实际存在的 `<qid>.json` 为准,`load_lambda_problem`→`list_qids` 即按此枚举),排除
+no-candidate 与 truth==0(q-error 无定义)的查询。三 bench 的具体分母:
+  | bench | 总 query | 报告分母(candidate-bearing) | 另排除(truth=0) | no-cand 被排除占比 |
+  |---|---|---|---|---|
+  | census | 468 | **467** | 0 | 0.2% |
+  | dmv | 1965 | **1926** | 2 (dmv.173/943) | 2% |
+  | stats_CEB_single | 632 | **180** | 0 | **71.5%** |
+  ⚠️ 关键不对称:census(DMV 近全覆盖(≥98%),排除少数无实质影响;但 **stats_CEB_single 只对 180/632≈28.5%
+  的子集报告**——其余 452 条无相关性候选、多半本就准、被整体排除。该 bench 的 mean 是对"能用 ext-stat
+  改进的那部分"的优化视图,不是整盘 workload 的改善幅度。跨 bench 并列时,每个 bench 必须标注
+  "report over N candidate-bearing / M total(ratio)",不可把 stats_CEB_single(28.5%)与 census/DMV(~100%)
+  的 mean 当作同构整盘量并列解释;若要"整盘"对照,可另补 no-cand 以其 baseline 计入的一行。
+  (测量端 driver measure_sgrid/census_parallel/dmv_parallel/stceb_parallel 均只产出 candidate-bearing
+  文件;故语料文件数 == 报告分母。权威引用见 docs/reporting-convention.md。)
+
 **体裁决定(未定,open):**
 - 改 v1 `paper/main.tex`(PG 主体、Oracle/DMV 进边界)→ 骨架 X 更稳;或
 - v2 新全文(Y 头号、Oracle 作第二引擎、DMV 作边界)。本 outline 按 **Y** 展开,但标记哪些节若走 X
