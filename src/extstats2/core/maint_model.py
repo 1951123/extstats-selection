@@ -75,24 +75,28 @@ class MaintParams:
 
     @staticmethod
     def from_dict(d: dict) -> "MaintParams":
+        # Table keys are canonicalised to *lowercase* so lookups are
+        # case-insensitive: the corpus may key camelCase tables (`.postHistory`)
+        # while callers / config use lowercase (`.posthistory`). Both resolve.
         return MaintParams(
             backend=d.get("backend", ""),
-            fixed_seconds={str(t): {str(l): float(v) for l, v in tab.items()}
+            fixed_seconds={str(t).lower(): {str(l): float(v) for l, v in tab.items()}
                            for t, tab in d.get(KEY_FIXED, {}).items()},
-            c_var={str(t): {str(l): float(v) for l, v in tab.items()}
+            c_var={str(t).lower(): {str(l): float(v) for l, v in tab.items()}
                    for t, tab in d.get(KEY_CVAR, {}).items()},
         )
 
     # -- typed accessors --------------------------------------------------
     def fixed(self, table: str, level: int) -> Optional[float]:
         """Measured one-refresh fixed seconds for ``table`` at ``level``, or
-        ``None`` when this (table, level) has not been measured."""
-        d = self.fixed_seconds.get(table)
+        ``None`` when this (table, level) has not been measured. Table matching is
+        case-insensitive (keys canonicalised to lowercase on load)."""
+        d = self.fixed_seconds.get(str(table).lower())
         return d.get(str(level)) if d else None
 
     def var(self, table: str, level: int) -> Optional[float]:
         """Measured per-extstat marginal ``c_var`` seconds, or ``None``."""
-        d = self.c_var.get(table)
+        d = self.c_var.get(str(table).lower())
         return d.get(str(level)) if d else None
 
     # -- linear model -----------------------------------------------------

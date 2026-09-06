@@ -48,41 +48,62 @@ from extstats2.core.predicates import predicate_columns
 
 ROOT = Path(__file__).resolve().parents[1]
 HUGE = 10**12
-# maintenance params now come from the measured corpus artifact _maint.json
-# (fixed_seconds / c_var per [table][level]); curated PG _W/TARGET below are kept
-# only as the closed-form FALLBACK when a (table, level) has not been measured.
-_W = 0.00256
-TARGET = {0: 100, 1: 1000}
-STCEB_REL = {".users": 40325, ".comments": 174305, ".votes": 328064,
-             ".posts": 91976, ".posthistory": 303187, ".postlinks": 11102}
-STCEB_TABLES = sorted(STCEB_REL)
-SINGLE_FIXED = {lv: _W * TARGET[lv] for lv in (0, 1)}   # census/dmv fallback
-
+# Maintenance params come ONLY from the measured corpus artifact _maint.json
+# (fixed_seconds / c_var per [table][level]). There are NO closed-form fallback
+# constants here: applying a maintenance constraint requires measured params
+# (else MaintNotMeasuredError). The storage kind needs no maintenance params.
 
 # Per (bench -> owner table): single-table benches have exactly one owner table.
 _BENCH_OWNER = {"census": ".climate", "dmv": ".dmv"}
 
 
+class MaintNotMeasuredError(RuntimeError):
+    """Raised when a maintenance cost is requested without measured _maint.json."""
+
+
 def _load_maint(bench, backend):
-    """Measured maintenance params for this (bench, backend), or None if absent."""
+    """Measured maintenance params for this (bench, backend). Raises if none.
+
+    Policy (2026-09-06): a maintenance-cost constraint is only allowed after the
+    model params have actually been measured (_maint.json). No closed-form
+    fallback — if you want to constrain on maintenance, measure it first.
+    """
     try:
-        return read_maint(Path(ROOT) / "results" / "measure", bench, backend)
-    except Exception:
-        return None
+        mp = read_maint(Path(ROOT) / "results" / "measure", bench, backend)
+    except Exception as e:  # pragma: no cover - defensive
+        mp = None
+    if mp is None:
+        raise MaintNotMeasuredError(
+            f"maintenance constraint requested for {bench}/{backend} but "
+            f"_maint.json is missing (results/measure/{bench}/{backend}/_maint."
+            f"json). Measure it first (fit_maint_postgres.py) before using a "
+            f"maintenance budget.")
+    return mp
 
 
-def _fixed_of(mp, table, lv, model_fixed) -> float:
-    """fixed(t, lv): measured from _maint.json, else the closed-form fallback."""
-    if mp is not None and mp.fixed(table, lv) is not None:
-        return mp.fixed(table, lv)
-    return model_fixed(table, lv)
+def _require_fixed(mp, table, lv) -> float:
+    """Measured fixed(t, lv); raises if that (table, level) was not measured.
+
+    Table keys are compared in a canonical *lowercase* form: the corpus
+    _maint.json may key camelCase tables (.postHistory/.postLinks) while
+    callers/config here use lowercase (.posthistory/.postlinks).
+    """
+    v = mp.fixed(table.lower(), lv) if table else None
+    if v is None:
+        raise MaintNotMeasuredError(
+            f"fixed(t={table!r}, level={lv}) not measured in _maint.json; "
+            f"cannot apply a maintenance constraint without it. Measure it first.")
+    return v
 
 
-def _cvar_of(mp, table, lv, model_cvar) -> float:
-    """c_var(t, lv): measured from _maint.json, else the closed-form fallback."""
-    if mp is not None and mp.var(table, lv) is not None:
-        return mp.var(table, lv)
-    return model_cvar(table, lv)
+def _require_cvar(mp, table, lv) -> float:
+    """Measured c_var(t, lv); raises if that (table, level) was not measured."""
+    v = mp.var(table.lower(), lv) if table else None
+    if v is None:
+        raise MaintNotMeasuredError(
+            f"c_var(t={table!r}, level={lv}) not measured in _maint.json; "
+            f"cannot apply a maintenance constraint without it. Measure it first.")
+    return v
 
 
 def _geo(vals):
@@ -93,10 +114,6 @@ def _geo(vals):
 def _summ(arr):
     a = np.asarray([float(x) for x in arr if x is not None and x == x], float)
     return {"mean": float(a.mean()), "geo": _geo(a), "max": float(a.max())}
-
-
-def fixed_stceb(t: str, lv: int) -> float:
-    return _W * min(TARGET[lv], STCEB_REL[t] / 300.0)
 
 
 def qtab(q):
@@ -165,11 +182,16 @@ def baseline_of(blocks, level):
     return _summ([float(v) for v in qb])
 
 
-def maint_multitable(blocks, level, grid, mp=None):
+def maint_multitable(blocks, level, grid, mp):
     """stats_CEB_single maintenance curve: enumerates active-table subsets; each
     active table t pays its measured fixed(t, level) once, and each selected stat
     is charged its OWN measured c_var(table(t), level) (via per-query qid->table),
     so the additive var sum over a subset is Σ_t c_var(t,ℓ)·n_t — per-table real.
+
+    Maintenance is only constrained with MEASURED params (_maint.json): fixed and
+    c_var come from _require_fixed/_require_cvar which raise if a (table,level)
+    is unmeasured (no closed-form). Query-stats with no single-table map are never
+    in a table subset, so they are left untouched (never selected).
     """
     Q = load_benchmark("stats_ceb_single")
     qt = {q.qid: qtab(q) for q in Q}
@@ -178,23 +200,22 @@ def maint_multitable(blocks, level, grid, mp=None):
     phys, opts, qb = _build(blocks, level, qt)
     q_table = [qt[q] for q in qids]
     base_by_q = {qid: float(b) for qid, b in zip(qids, qb)}
-    base_mean = float(np.mean(list(base_by_q.values())))
+    # the set of activateable tables = the tables actually MEASURED in _maint.json
+    # (canonical lowercase), not a hardcoded list.
+    measured_tables = sorted({t.lower() for t in mp.c_var})
 
-    def _fx_meas(t, lv):
-        return _fixed_of(mp, t, lv, fixed_stceb)
-
-    def _cv_meas(t, lv):
-        return _cvar_of(mp, t, lv, lambda tbl, ll: 0.02 * (TARGET[int(ll)] / 1000.0))
-
-    # attach each stat its measured per-table c_var (frozen -> replace, order kept)
-    phys = [replace(p, maint_cost=_cv_meas(p.table, int(level))) for p in phys]
+    # attach each mapped stat its measured per-table c_var (frozen->replace; keep
+    # order so opts indices stay valid); unmapped (table='') stats stay untouched
+    # since they never belong to a measured-table subset.
+    phys = [replace(p, maint_cost=_require_cvar(mp, p.table, int(level))) if p.table
+            else p for p in phys]
 
     rows = []
     for M in grid:
         best = None
-        for r in range(len(STCEB_TABLES) + 1):
-            for S in combinations(STCEB_TABLES, r):
-                fS = sum(_fx_meas(t, int(level)) for t in S)
+        for r in range(len(measured_tables) + 1):
+            for S in combinations(measured_tables, r):
+                fS = sum(_require_fixed(mp, t, int(level)) for t in S)
                 if fS > M + 1e-9:
                     continue
                 keep = [i for i, t in enumerate(q_table) if t in S]
@@ -237,12 +258,9 @@ def main():
             "oracle.table_maintain_tiers/stat_maintain_var; run storage first.")
     blocks = load_lambda_problem(ROOT / "results" / "measure", bench,
                                  backend)[1]
-    # measured maintenance params (empty/None -> closed-form fallback in helpers)
+    # measured maintenance params are REQUIRED for a maint constraint; _load_maint
+    # raises if _maint.json is absent (no closed-form fallback).
     mp = _load_maint(bench, backend) if kind == "maint" else None
-
-    # model-c_var fallback (PG closed-form per target), used if unmeasured
-    def _model_cvar(t, lv):
-        return 0.02 * (TARGET[int(lv)] / 1000.0)
 
     baseline, per_level = {}, {}
     owner = _BENCH_OWNER.get(bench)
@@ -254,10 +272,8 @@ def main():
         elif bench == "stats_ceb_single":
             rows = maint_multitable(blocks, lv, grid, mp)
         else:
-            fixed = (SINGLE_FIXED[iv] if mp is None or mp.fixed(owner, iv) is None
-                     else mp.fixed(owner, iv))
-            cvar = (_model_cvar(owner, iv) if mp is None or mp.var(owner, iv) is None
-                    else mp.var(owner, iv))
+            fixed = _require_fixed(mp, owner, iv)
+            cvar = _require_cvar(mp, owner, iv)
             rows = maint_single(blocks, lv, grid, fixed, cvar)
         per_level[lv] = rows
 
@@ -287,9 +303,7 @@ def main():
     # report the per-level fixed actually used (measured owner fixed for single-table)
     fixed_sec_out = None
     if kind == "maint" and bench != "stats_ceb_single" and owner:
-        fixed_sec_out = {str(lv): (
-            SINGLE_FIXED[int(lv)] if mp is None or mp.fixed(owner, int(lv)) is None
-            else mp.fixed(owner, int(lv))) for lv in (0, 1)}
+        fixed_sec_out = {str(lv): _require_fixed(mp, owner, int(lv)) for lv in (0, 1)}
     out = {"bench": bench, "backend": backend,
            "budget": {"kind": kind, "unit": unit},
            "levels": ["0", "1"], "baseline": baseline,
