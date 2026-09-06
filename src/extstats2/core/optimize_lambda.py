@@ -19,7 +19,7 @@ from typing import Optional
 
 import numpy as np
 
-from .measure_lambda_io import read_meta, read_query_measure, result_dir
+from .measure_lambda_io import list_qids, read_meta, read_query_measure, result_dir
 from .optimize import (Option, OptimizerClass, PhysicalStat, solve_ilp)
 
 OBJECTIVE_MEAN = "mean"
@@ -30,7 +30,7 @@ def load_lambda_problem(outdir: Path, workload: str, backend: str):
     d = result_dir(outdir, workload, backend)
     meta = read_meta(d)
     blocks = {}
-    for qid in sorted(p.stem for p in d.glob("*.json") if p.stem != "_meta"):
+    for qid in list_qids(d):          # skips _meta.json and _maint.json
         b = read_query_measure(d, qid)
         if b is not None:
             blocks[qid] = b

@@ -36,22 +36,53 @@ Usage (default backend=postgres):
 """
 from __future__ import annotations
 import argparse, json, math, time
+from dataclasses import replace
 from itertools import combinations
 from pathlib import Path
 import numpy as np
 from extstats2.core.optimize_lambda import load_lambda_problem, build_inner_at_level
 from extstats2.core.optimize import solve_ilp, OptimizerClass
+from extstats2.core.maint_model import read_maint
 from extstats2.bench import load_benchmark
 from extstats2.core.predicates import predicate_columns
 
 ROOT = Path(__file__).resolve().parents[1]
 HUGE = 10**12
+# maintenance params now come from the measured corpus artifact _maint.json
+# (fixed_seconds / c_var per [table][level]); curated PG _W/TARGET below are kept
+# only as the closed-form FALLBACK when a (table, level) has not been measured.
 _W = 0.00256
 TARGET = {0: 100, 1: 1000}
 STCEB_REL = {".users": 40325, ".comments": 174305, ".votes": 328064,
              ".posts": 91976, ".posthistory": 303187, ".postlinks": 11102}
 STCEB_TABLES = sorted(STCEB_REL)
-SINGLE_FIXED = {lv: _W * TARGET[lv] for lv in (0, 1)}   # census/dmv: rel/300 >> target
+SINGLE_FIXED = {lv: _W * TARGET[lv] for lv in (0, 1)}   # census/dmv fallback
+
+
+# Per (bench -> owner table): single-table benches have exactly one owner table.
+_BENCH_OWNER = {"census": ".climate", "dmv": ".dmv"}
+
+
+def _load_maint(bench, backend):
+    """Measured maintenance params for this (bench, backend), or None if absent."""
+    try:
+        return read_maint(Path(ROOT) / "results" / "measure", bench, backend)
+    except Exception:
+        return None
+
+
+def _fixed_of(mp, table, lv, model_fixed) -> float:
+    """fixed(t, lv): measured from _maint.json, else the closed-form fallback."""
+    if mp is not None and mp.fixed(table, lv) is not None:
+        return mp.fixed(table, lv)
+    return model_fixed(table, lv)
+
+
+def _cvar_of(mp, table, lv, model_cvar) -> float:
+    """c_var(t, lv): measured from _maint.json, else the closed-form fallback."""
+    if mp is not None and mp.var(table, lv) is not None:
+        return mp.var(table, lv)
+    return model_cvar(table, lv)
 
 
 def _geo(vals):
@@ -107,8 +138,14 @@ def storage_curve(blocks, level, grid):
     return rows
 
 
-def maint_single(blocks, level, grid, fixed):
+def maint_single(blocks, level, grid, fixed, c_var_per_stat):
+    """Single-table maintenance curve: each refresh pays fixed once + per-stat
+    c_var (additive over selected stats). ``fixed`` and ``c_var_per_stat`` are
+    per-λ values (measured from _maint.json when available)."""
     phys, opts, qb = _build(blocks, level)
+    # PhysicalStat is frozen: rebuild with the per-stat measured c_var (order
+    # preserved so opts' stat_index references to phys stay valid).
+    phys = [replace(p, maint_cost=c_var_per_stat) for p in phys]
     rows = []
     for M in grid:
         if M <= fixed + 1e-9:
@@ -127,19 +164,27 @@ def baseline_of(blocks, level):
     return _summ([float(v) for v in qb])
 
 
-def maint_multitable(blocks, level, grid):
+def maint_multitable(blocks, level, grid, mp=None):
+    """stats_CEB_single maintenance curve: enumerates active-table subsets; each
+    active table t pays its measured fixed(t, level) once; per-stat marginal uses
+    the (closed-form) var approx (per-stat table attribution is not on the λ row).
+    """
     phys, opts, qb = _build(blocks, level)
     Q = load_benchmark("stats_ceb_single")
     qt = {q.qid: qtab(q) for q in Q}
     qids = list(blocks); q_table = [qt[q] for q in qids]
     base_by_q = {qid: float(b) for qid, b in zip(qids, qb)}
     base_mean = float(np.mean(list(base_by_q.values())))
+
+    def _fx_meas(t, lv):
+        return _fixed_of(mp, t, lv, fixed_stceb)
+
     rows = []
     for M in grid:
         best = None
         for r in range(len(STCEB_TABLES) + 1):
             for S in combinations(STCEB_TABLES, r):
-                fS = sum(fixed_stceb(t, int(level)) for t in S)
+                fS = sum(_fx_meas(t, int(level)) for t in S)
                 if fS > M + 1e-9:
                     continue
                 keep = [i for i, t in enumerate(q_table) if t in S]
@@ -182,17 +227,28 @@ def main():
             "oracle.table_maintain_tiers/stat_maintain_var; run storage first.")
     blocks = load_lambda_problem(ROOT / "results" / "measure", bench,
                                  backend)[1]
+    # measured maintenance params (empty/None -> closed-form fallback in helpers)
+    mp = _load_maint(bench, backend) if kind == "maint" else None
+
+    # model-c_var fallback (PG closed-form per target), used if unmeasured
+    def _model_cvar(t, lv):
+        return 0.02 * (TARGET[int(lv)] / 1000.0)
 
     baseline, per_level = {}, {}
+    owner = _BENCH_OWNER.get(bench)
     for lv in ("0", "1"):
         baseline[lv] = baseline_of(blocks, lv)
         iv = int(lv)
         if kind == "storage":
             rows = storage_curve(blocks, lv, grid)
         elif bench == "stats_ceb_single":
-            rows = maint_multitable(blocks, lv, grid)
+            rows = maint_multitable(blocks, lv, grid, mp)
         else:
-            rows = maint_single(blocks, lv, grid, SINGLE_FIXED[iv])
+            fixed = (SINGLE_FIXED[iv] if mp is None or mp.fixed(owner, iv) is None
+                     else mp.fixed(owner, iv))
+            cvar = (_model_cvar(owner, iv) if mp is None or mp.var(owner, iv) is None
+                    else mp.var(owner, iv))
+            rows = maint_single(blocks, lv, grid, fixed, cvar)
         per_level[lv] = rows
 
     argmin = []
@@ -218,10 +274,16 @@ def main():
         argmin.append(row)
 
     unit = "bytes" if kind == "storage" else "seconds-per-refresh"
+    # report the per-level fixed actually used (measured owner fixed for single-table)
+    fixed_sec_out = None
+    if kind == "maint" and bench != "stats_ceb_single" and owner:
+        fixed_sec_out = {str(lv): (
+            SINGLE_FIXED[int(lv)] if mp is None or mp.fixed(owner, int(lv)) is None
+            else mp.fixed(owner, int(lv))) for lv in (0, 1)}
     out = {"bench": bench, "backend": backend,
            "budget": {"kind": kind, "unit": unit},
            "levels": ["0", "1"], "baseline": baseline,
-           "fixed_sec": (SINGLE_FIXED if (kind == "maint" and bench != "stats_ceb_single") else None),
+           "fixed_sec": fixed_sec_out,
            "per_level": per_level, "argmin_over_level": argmin}
     # Per-backend subtree (PG and Oracle curves never collide):
     odir = ROOT / "results" / "curves" / backend
