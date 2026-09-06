@@ -98,12 +98,13 @@ def _time_analyze_once(backend: PostgresBackend, table: str) -> float:
         return time.perf_counter() - t0
 
 
-#: Minimum per-stat marginal we treat as resolvable (sec). When the measured
-#: paired delta is *below* this (sub-noise), we store this floor instead of a
-#: hard 0, because a per-extstat marginal can never be ≤ 0 physically and a 0
-#: would silently zero out the maintenance-var term. Calibrated as a conservative
-#: fraction of the PG closed-form L1 marginal (~0.02) — a low but non-zero bound.
-_CVAR_FLOOR = 0.005
+#: Floor for a measured per-stat marginal (sec). We still genuinely measure
+#: c_var (paired-delta whole-scan marginal / k), but any measured value below
+#: this is treated as exactly this floor (decision 2026-09-06): a sub-millisecond
+#: per-stat marginal is below reliable wall-clock resolution on fast/small tables
+#: and physically cannot be ≤ 0, so below 0.001s we store the 0.001 bound rather
+#: than a noisy near-zero that would silently zero / distort the maint-var term.
+_CVAR_FLOOR = 0.001
 
 
 def measure_table_maintenance_pg(backend: PostgresBackend, table: str, level: int,
@@ -119,10 +120,10 @@ def measure_table_maintenance_pg(backend: PostgresBackend, table: str, level: in
     ``c_var``  = the per-extstat marginal, resolved by PAIRED per-round deltas:
     each round times a bare ANALYZE then an ANALYZE carrying ``k`` probe column-group
     stats back-to-back (same cache state, cancelling slow drift); c_var = median
-    of ``repeats`` deltas / ``k``. A paired delta is far more robust than subtracting
-    two separately-medianed runs, which under drifts clamps a real small marginal
-    to 0. A sub-noise positive delta is floored to :data:`_CVAR_FLOOR` (a per-stat
-    marginal is never ≤ 0; a hard 0 would silently zero the maintenance-var term).
+    of ``repeats`` deltas / ``k``. Genuine measurement is kept, but a measured value
+    < :data:`_CVAR_FLOOR` (0.001s) is treated as exactly 0.001s (decision
+    2026-09-06) — sub-ms marginal is below wall-clock resolution on fast tables
+    and can't be 0.
     """
     tgt = backend._target_for_level(table, level)
     if tgt is None:
@@ -153,11 +154,8 @@ def measure_table_maintenance_pg(backend: PostgresBackend, table: str, level: in
     finally:
         for o in objs:
             backend.drop_stat(o)
-    if per_stat <= 0:
-        # measured delta at/below noise floor: physically a stat marginal is > 0,
-        # so keep a low floor rather than emit a hard 0.
-        per_stat = _CVAR_FLOOR
-    return fixed, per_stat
+    # genuine measurement kept; floor anything below the 0.001s bound up to 0.001s
+    return fixed, max(per_stat, _CVAR_FLOOR)
 
 
 def fit_pg_bench(bench: str, pgdb: str, owner_tables: Sequence[str],
