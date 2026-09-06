@@ -1,9 +1,23 @@
 # extended-stats-optim-v2 — 通用化架构设计
 
-> 状态: **设计阶段 (draft)**。本文档是 v2 代码库的蓝图，实现前请先 review。
+> 状态: **设计/实现并行的活文档**。本文档是 v2 代码库的蓝图与设计演进日志。
 > 目标: 把 v1 (`extended-stats-optim`) 的贡献从 **PostgreSQL 专属** 泛化到
 > 多个数据库后端（首期 **PostgreSQL + Oracle**），同时保留 v1 的三项核心成果：
 > (1) one-stat sufficiency；(2) Protocol-A / Protocol-M 测量；(3) budgeted ILP 分配。
+
+> **〔当前主线 2026-09-05 · 本文件的「测量/实验口径」一律以 S-grid 语料为准〕**
+> 本仓库已切换为 **S-grid(dataset-bound 采样)** 测量主位：全局采样行
+> $S_{rows}\in\{30000,300000\}$，跨 PG+Oracle，按 owner 表绑定：
+> - PG：`S/300` 阶梯 → `statistics_target` 级 L0≈100 / L1≈1000（`single_target`）。
+> - Oracle：每表 `estimate_percent=100·min(S,N)/N`（`post_links` 等小表饱和 100%），
+>   表示分辨率（桶/SIZE）由引擎自决。
+> 报告分母取 **candidate-bearing**、$budget$ 统一为 $\{storage, maint\}$ 两轴、
+> 以各 bench 的 S-grid 语料 + `results/milp_{storage,maint}_sgrid_*.json` 曲线为准
+> （详见 `measurement-matrix.md` / `reporting-convention.md` / `experiments-roster.md`）。
+> 本文中残留的 **dense-era ladder 数值表（tgt50/100/…/10000、跨库小样本、旧维护 tiers 等）
+> 属历史机制佐证**——它们表述的 mechanism 不随档位退化而失效，但**具体读数须由 S-grid 语料
+> 重新派生/复测后用于数字性结论**；凡标注〔S-grid 待复测〕处即尚未以 S-grid 档复测。
+> 早期以 dense 档口径写成的数值性陈述，凡与现行 S-grid/统一曲线冲突者以本节封顶注为准。
 
 ---
 
@@ -121,8 +135,8 @@ $$
 > 效率-精度折衷档**——它让目标从乘性退化为精确线性、保持稀疏 ILP 可解，其中
 > 隐含的假设是"多数坏查询的收益来自单个（够深的）主导相关簇"。此假设**并非
 > 所有数据都成立**：DMV 上大量坏尾查询需 ≥3 列（或采样更深的）单覆盖，
-> arity-2 + cap=1 下即使宽 budget 也留 ~240/1924 不修（`results/milp_effect_time_
-> dmv_L1.json`）。因此：
+> arity-2 + cap=1 下即使宽 budget 也留 ~240/1924 不修（S-grid 口径见
+> `results/milp_storage_sgrid_dmv.json` 的 floor；dense-era `milp_effect_time_dmv_L1` 已随统一命名清除）。因此：
 > - 本系统在 PG 上以 cap=1 运行为**一档可用配置**（与 PG planner 每次一条合取
 >   查询倾向单 MV 统计 + 求可解一致），census/stats_CEB_single/DMV 的既有
 >   E2E/FB-order/maint 结论皆属该档，不因重定位而失效；
@@ -167,14 +181,16 @@ $$
     `maint(S) = Σ_{表t} base(t, max level on t) [每表一次, 按最高档] + Σ_{s∈S} var(s)`。
   - **backend**: `table_maintain_tiers(table)`（每 target 档的固定 base；index=
     达到的最高 level）+ `stat_maintain_var(obj)`（每统计变动态）。`measure.py` 的
-    `maint_cost` 现只承载 var。
+    `maint_cost` 现只承载 var。维护的**S-grid 统一曲线**为 `results/milp_maint_sgrid_<bench>.json`
+    （`budget.unit=seconds-per-refresh`）。
   - **optimize**: `MaintProfile.table_base_tiers` 注入后，求解器加表激活/档位
     指示变量 $w_{t,\ell}$，维护预算 = 每激活表的阶梯固定 + 每统计 var（线性 MILP）。
     不传 `MaintProfile` 时退化为 additive fallback（向后兼容）。
-  - **固定成本非线性（校准）**：ANALYZE 采样 `~min(300·t, 表行数)` 行 → 固定成本
-    分段线性增长到全表扫描饱和点 $t_{sat}\approx N/300$。实测 Census `climate`
-    校准 $w\approx0.00256$ s/target, `t_sat≈8194`；tiers [0.26,2.56,20.98] 复现
-    实测 [0.25,2.59,20.55]。
+  - **固定成本非线性（校准，dense 档历史）**：ANALYZE 采样 `~min(300·t, 表行数)` 行 → 固定成本
+    分段线性增长到全表扫描饱和点 $t_{sat}\approx N/300$。早期 dense 档 Census `climate` 实测
+    $w\approx0.00256$ s/target, `t_sat≈8194`；tiers [0.26,2.56,20.98] 复现实测 [0.25,2.59,20.55]。
+    这些数是** dense 档**标定；S-grid 下维护成本以 `results/milp_maint_sgrid_census.json` 的
+    `fixed_sec={L0:0.256, L1:2.56}` 载入模型（`budget.unit=seconds-per-refresh`）。
   - **语义区分**：`maint_cost`/tiers 是部署后一次刷新代价（进 ILP）；测量阶段实验
     成本**不入模型**。目标保持纯 q-error，维护成本仅作硬约束。
 - **[O2] planner 干扰是有条件成立的独立性的反例。** 模型独立性靠剪枝（列不重叠
@@ -184,8 +200,8 @@ $$
   是 v2 的必要阶段，而非可选。
   - **结果落地**：PG 端的端到端核查与"OID-order 修复（PG 专用扩展层）"见
     [`e2e-deployment-interference-results.md`](e2e-deployment-interference-results.md)；
-    该 note 量化了 planner-interference gap，并给出四策略（naive / topo / FB-order /
-    Option-A）全 468-query 真部署对照与图。
+    该 note 已为 **S-grid 派生**：量化了 planner-interference gap，并给出四策略
+    （naive / topo / FB-order / **disjoint**；即早期所称 Option-A）的 census S-grid 真部署对照与图。
   - **单表 ext-stat 的收益边界**：把单表子计划选出的扩展统计迁移到多表 join
     workload（stats_CEB，145 joins）几乎不改 join 计划（结构仅 8/143 变、方向不佳）——
     stats_CEB 的误差主源是 join（跨表 join selectivity），非基表选择谓词。归因与
@@ -523,16 +539,29 @@ def measure_candidates(backend, query, cands, protocol=None):
   base≈1000-4000）上能把 qerr 压到个位数（见 §6.3c）。`ndistinct`(group) 支持；
   `dependency` 不支持。
 - **维护成本模型**: 列组共享一趟 GATHER 扫描 → `MaintStructure.FIXED_ONLY` +
-  容量模型 `per_scan`（estimate_percent 是每次整表扫描的采样抽屉）。`table_maintain_tiers`
-  按 CLIMATE(~2.46M) 标定：estimate 1%→0.54s、10%→2.10s、100%→21.7s（degree=1，按行数
-  缩放）；`stat_maintain_var` ≈ 常数（无额外按统计的扫描）。
+  容量模型 `per_scan`（estimate_percent 是每次整表扫描的采样抽屉）。早期 dense 档
+  `table_maintain_tiers` 按 CLIMATE(~2.46M) 标定：estimate 1%→0.54s、10%→2.10s、
+  100%→21.7s（degree=1，按行数缩放）；`stat_maintain_var` ≈ 常数（无额外按统计的扫描）。
+  **S-grid 口径**：Oracle 的采样档现为**每 owner 表** `est%=100·min(S,N)/N`
+  （`S∈{30000,300000}`；`post_links` 等小表 `min(S,N)=N`→饱和 100%），表示分辨率桶数由引擎
+  自决（`SIZE` 仅上界，见 §7bis 表示轴定稿单点 `(254,)`）。维护曲线见
+  `results/milp_maint_sgrid_<bench>.json`。
 - 连接：python-oracledb thin，autocommit；owner = 当前 schema (SYSTEM)。基准表都以未加引
   号、大写形式匹配（Oracle 折叠未引号标识符为大写）。
 
 ### 6.3 跨后端交叉验证（M4）— 结论与教训
 
+> **〔S-grid 口径注〕§6.3(a–d2) 是 M4 在 Census `climate`(2,458,285 行) 上、以 **dense 档**（单列
+> `default_statistics_target`/Oracle `estimate_percent` 的手动档、逐查询 query.62/184/61 micro）验证的
+> **机制性结论**。它们的**取值(e.g. 平均 qerr 25/25、主导对逐查询数值、top-k 修到几)是 dense 档读数**；
+> 在现行 S-grid(dataset-bound S∈{30000,300000})语料下这些 exact 数值**尚未逐条复测**，故列为**历史机制
+> 佐证 + 〔S-grid 待复测〕**，不直接作 S-grid 数字性结论。机制性论点（自然单列基线需健康、引擎对齐、
+> 主导列组多为引擎无关、范围谓词上 Oracle column-group 边界等)**不随档位退化而失效**。S-grid 语料的
+> candidate-bearing 基线/floor 见 `measurement-matrix.md` + `results/milp_{storage,maint}_sgrid_<bench>.json`
+> (census L1 基线 mean≈25.3、floor≈1.40;dmv L1→6.51;stats_ceb_single≈1.08)。
+
 在 Census `climate`（PG `census` 与 Oracle `SYSTEM.CLIMATE` **同为 2,458,285 行**，
-逐行一致）上，用同一份 benchmark 与同一套 `core/` 做交叉验证。
+逐行一致）上，用同一份 benchmark 与同一套 `core/` 做交叉验证(dense 档读数，见上注)。
 
 **(a) 测量假象修正：基线必须用"自然单列统计"。** 最初的 Oracle 基线报出 qerr≈32，
 而 PG 只报 ~1.8 —— 看似引擎天差地别。追查发现这是 **Oracle 侧自造的假象**：本后端
@@ -566,8 +595,8 @@ AUTO at 100%`）；为此两后端都增加 `restore_natural_stats()`（PG 单�
 些查询买列组/投预算"的靶子 —— 一个小的、引擎不变的尾部。
 
 **(c) 主导列组引擎无关（one-stat sufficiency 的跨引擎证据）。** 对这些最坏查询，两端
-各自独立枚举 2 列 mcv 列组并报告最优者（数值为复现脚本 `results/cross_focus.json`；
-两者皆用引擎全表采样建列组）：
+各自独立枚举 2 列 mcv 列组并报告最优者（数值来自复现模块 `src/extstats2/eval/cross_focus.py`，
+其 dense 档结果 JSON 已随 dense 清理移除；两者皆用引擎全表采样建列组）：
 
 | 查询 (truth) | 自然基线 PG / Oracle | 主导对 (两引擎各自最优) | 非主导对照对 |
 | --- | --- | --- | --- |
@@ -598,8 +627,12 @@ qerr>5 的 top-20 条（PG 枚举全部 2 列 mcv，`statistics_target=100`）�
   语义会让某个列组只对 PG 有效。这是 (c) 小样本结论在规模化时的诚实边界，也是 M4/后续
   要量化的"两引擎可修复集重叠度"，而非无条件的逐查询一致。
 
-复现：`cross_focus`（小样本 3 条，perfect agreement）+ `cross_scale topk`（PG top-20 +
-Oracle 抽验）。结果 JSON 落在 `results/`。
+> (c)/(d) 的 `results/cross_focus.json` 等 **dense 档结果 JSON 已随 dense 清理移入历史/归档**；
+> 代码模块 `src/extstats2/eval/{cross_focus,cross_scale,cross_compare}.py` 仍保留。
+> 给定数值结论若要作 S-grid 派生命题，需重跑这些模块复核（〔S-grid 待复测〕）。
+
+复现：`cross_focus`（小样本 3 条，perfect agreement）模块 + `cross_scale topk`（PG top-20 +
+Oracle 抽验）模块；其 dense 档结果 JSON 已移除(见上)。
 
 **(d2) 谓词形状 × 后端 ext 能力边界 —— Oracle column-group 只修等值/IN，不修范围（2026-09-03）。**
 (d) 里 query.465 的"PG 修好、Oracle 几乎不动"反例，其机制性解释（Oracle 官方文档 + optimizer
@@ -763,6 +796,14 @@ $w_{t,\ell}$，使**每被激活表只付一次固定 ANALYZE 成本**（按其�
 
 > 这是 §6.3(g) 论点 + 一路讨论收敛成的**正式模型 spec**，供后续求解器实现参照；
 > 当前 `core/optimize.py` 仍是 §7 的 per-stat-level 模型，二者在实现上尚未合并。
+
+> **〔当前操作化 = S-grid〕** §7bis 的"决策变量 = 每表采样 $S_t$"正是 S-grid 的
+> **理论表述**：本仓库现把 $\Lambda$ 取为 dataset-bound 全局 $\{S_{rows}=30000,300000\}$
+> (PG → target≈100/1000;Oracle → 每表 `est%=100·min(S,N)/N`)。因此 §7bis 下文的 **λ/晶格
+> 机制行文仍是指定语义**；凡它引用的 `param_tiers`/`tgtXX` 具体 ladder 与 "骨架验证" 数值表是
+> **dense 档历史微证**，要作数字性结论需以 S-grid 档复测（〔S-grid 待复测〕），非直接取用。
+> §7bis 的"未实现/未合并"状态不变（当前优化走 `results/milp_{storage,maint}_sgrid_*.json` 曲线
+> 的 per-level 模型，见 `measurement-matrix.md`）。
 
 > **范围声明：决策是每表采样 λ；ext parameters 是 λ 之下的对象层。单列不是独立决策变量——它的
 > target 全等置为 $S_\lambda/300$，就是 λ 在 PG 的实现（详见 §6.3g 末"研究范围决策"定稿）。**
@@ -961,21 +1002,37 @@ CLI 流程与 v1 一致：`generate → measure → optimize → verify`，但�
 4. **M4 — 交叉验证（已完成核心验证）**：同一份 `core` 在 PG/Oracle 上对比，证明抽象层真正
    通用。关键结论见 §6.3：*自然单列基线逐查询对齐（log-qerr corr≈1.0）*、*修正了"Oracle
    基线偏差"的测量假象（改用自然单列统计基线）*，且*最坏相关查询的主导列组两引擎选定
-   一致（query.62/184/61，agreement=True，复现脚本 `extstats2.eval.cross_focus`）*。
+   一致（query.62/184/61，agreement=True，复现模块 `src/extstats2/eval/cross_focus.py`）*。
    收尾可选：在完整 workload 上用 ILP 对比两端整体"买哪些列组"、以及协议-M/更精细的成本。
+   （M4 的读数主要为 **dense 档**；S-grid 再证实与跨引擎可修复集重叠度仍在推进。）
+
+5. **M5 — S-grid 测量主位（进行中）**：全库切到 dataset-bound $S_{rows}\in\{30000,300000\}$
+   （PG `S/300`→target≈{100,1000}；Oracle 每表 `est%=100·min(S,N)/N`）。状态见
+   `measurement-matrix.md`：census/PG ✅467、stats_CEB_single/PG ✅180·Oracle✅180、dmv/PG ✅1926；
+   census/Oracle 与 dmv/Oracle 尚在/待补（Oracle 侧单 DB 无 clone-mirror，串行 Protocol-A）。
+6. **M6 — L2 统一 storage/maint 曲线（PG 三 bench ✅）**：`results/milp_{storage,maint}_sgrid_<bench>.json`
+   （census L1→mean 1.40/maint 8s→1.405；dmv L1 floor 6.51；CEBSI→1.082；Oracle arm 待补）。
+7. **M7 — L3 E2E 部署（PG census ✅，余待补）**：四策略（naive 5.98→FB-order 1.51 等，见
+   `e2e-deployment-interference-results.md`）；dmv/stats 的 PG、以及全 Oracle L3 各自待跑
+   （详见 `experiments-roster.md`）。
 
 ---
 
 ## 10. 未决问题 / 决策点
 
 > 方法论层面的开放点见 §1.7 的 [O1]/[O2]/[O3]（维护成本建模、planner 干扰与
-> 模型可信区、验证阶段）。本章列出的是**工程实现**层面的决策点：
+> 模型可信区、验证阶段）。本章列出的是**工程实现**层面的决策点。
+> 不少项已在 S-grid 主线拍板/落进 `measurement-matrix.md` / `reporting-convention.md`；
+> 已决者标注 ✓：
 
+- [✓] 容量归一化 — **已由 S-grid 拍板为 dataset-bound 采样档**：全局 $S_{rows}\in\{30000,300000\}$
+      （levels 0/1），各后端用自己的投影落到原生档（PG `statistics_target`≈100/1000；Oracle
+      每表 `est%=100·min(S,N)/N`）。core 侧用**级别索引 L0/L1**，不做 `[0..1]` 强度伪同值。
 - [ ] `dependency` 能力在 Oracle 是否实现，还是仅标记不支持？建议首期**不实现**
       （core 的 MILP 能处理"某后端不支持某能力"，只需把该能力候选权重置为无增益）。
-- [ ] 容量归一化：core 用 `[0..1]` 采样强度还是级别索引？建议**级别索引**
-      （如 `(0,1,2)` 映射到各自的原生级别），因为 PG 的 `statistics_target` 与
-      Oracle 的 `estimate_percent`/`BUCKETS` 无线性可逆映射。
-- [ ] q-error 定义与 zero 处理：保持 v1 语义（`max/min`，零侧用下限 1）。
+- [✓] 报告分母 = 每查询经**candidate-bearing**(arity-2 可用候选)过滤后统计；详见
+      `reporting-convention.md`（不对称警示：不可把全体 query 当分母）。
+- [✓] q-error 度量 — 报告主用 mean/geomean + max，见 `reporting-convention.md`；
+      S-grid 曲线把质量轴 = mean/geo/max、预算轴 = storage(bytes)/maint(seconds-per-refresh)。
 - [ ] 连接层：`python-oracledb`（thin 模式）还是 `cx_Oracle`？建议 thin。
 - [ ] 备份/恢复的并发安全：Protocol-M 备份表命名需 per-session 唯一（沿用 v1 约定）。
