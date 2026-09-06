@@ -12,8 +12,14 @@ This gives, per query, a ``by_lambda`` dict whose outer key is the λ tier and
 each slot carries BOTH its no-ext baseline and the candidate readings measured in
 that same λ-state — the same-``S`` fair pairing the optimizer consumes.
 
-Results are written **one JSON file per query** via
-:mod:`extstats2.core.measure_lambda_io`.
+NOTE on ``maint_var`` (2026-09-06): each slot's ``maint_var`` is currently a
+*placeholder* — the backend's closed-form model constant (PG: 0.002 at L0 / 0.02
+at L1 for 2-col stats; Oracle: a flat ``_VAR_PER_STAT_S``), NOT a timed
+per-extstat measurement. It is deliberately kept as a first-class per-slot field
+so a future real per-extstat measurement (e.g. timing the marginal refresh of one
+(``colset``, ``param``) object) can replace it as a drop-in at the single
+``mv = backend.stat_maintain_var(obj)`` seam inside each measure driver. Until
+then, treat ``maint_var`` as a model estimate, not measured evidence.
 """
 
 from __future__ import annotations
@@ -128,6 +134,10 @@ def measure_query_lambda(
                     backend.build_stat_param(obj, p)
                     est = backend.estimate(query)
                     size = backend.stat_size_bytes(obj)
+                    # SEAM (placeholder): maint_var = model constant for now; a
+                    # future real per-extstat measurement would replace this
+                    # call with a timed marginal cost into this same per-slot
+                    # field.
                     mv = backend.stat_maintain_var(obj)
                     lam_q = (query.ground_truth / n) * (rows or 0.0) \
                         if query.ground_truth else None
@@ -234,6 +244,9 @@ def measure_query_lambda_m(
                 try:
                     est = backend.estimate(query)
                     size = backend.stat_size_bytes(obj)
+                    # SEAM (placeholder): see the sibling call in the
+                    # Protocol-A driver — maint_var is a model constant today,
+                    # kept per-slot so a real measure can be dropped in later.
                     mv = backend.stat_maintain_var(obj)
                     lam_q = (query.ground_truth / n) * (rows or 0.0) \
                         if query.ground_truth else None
