@@ -114,7 +114,9 @@ def go(level: str, budget: int, db: str, table: str, limit: int, disjoint: bool,
             "baseline_qerr": base_by_qid.get(qid),
         })
 
-    haspred = [r for r in rows if r["predicted_qerr"] == r["predicted_qerr"]
+    haspred = [r for r in rows
+               if r["predicted_qerr"] is not None
+               and r["predicted_qerr"] == r["predicted_qerr"]
                and r["true_qerr"] == r["true_qerr"]]
     result = {
         "level": level, "budget_bytes": budget, "db": db, "table": table,

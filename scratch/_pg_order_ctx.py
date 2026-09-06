@@ -51,6 +51,8 @@ def load_ctx(level="1", budget=100000):
         skey = f"|{','.join(sorted(c))}|P{param}"
         qerd = {}
         for q in qids_all:
+            if q not in candidx:      # no file / no-candidate query (S-grid skips it)
+                continue
             ev = candidx[q].get(tuple(sorted(c)), {}).get(param)
             if ev is not None:
                 qerd[q] = ev
