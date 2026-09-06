@@ -7,7 +7,7 @@
 
 ## 1. 优化问题（结合 measure 的口径）
 
-沿用 architecture §2 的 MILP：目标 =（candidate-bearing 分母下）minimize 平均
+MILP：目标 =（candidate-bearing 分母下）minimize 平均
 q-error；决策 = 创建哪些 (列组,cap) $y$ + 每条 query 用哪个 $x$；约束是列不重叠
 稀疏、已创建才可选、以及一条 budget。budget 有两条正交轴：
 
