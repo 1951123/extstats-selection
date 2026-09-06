@@ -60,11 +60,21 @@ $$S_{\text{realized}}(t, \ell)=\min(S_{\ell},\,N_t),\qquad\text{PG: }S=\min(300\
 
 ### 1.2 λ 与 fidelity：表行数三类决定了"每条查询能采到多少个真值行"
 
-fidelity 指"这次 ANALYZE/GATHER 的样本里，**该查询真正命中的那几行**指望出现几次"，
-记作每 (查询, 表, level) 的期望捕获数（`measure` 落盘字段 `lambda_expected`，公式重派生自
-`measure.py::_lambda_expected` / `base.py` sampling contract）：
+**符号定义（先厘清，避免混淆三个量）：**
 
-$$\lambda_{q}(t,\ell)=\underbrace{\tfrac{S_{\text{realized}}(t,\ell)}{N_t}}_{\text{fraction } f_{t,\ell}}\times\ \text{truth}_q.$$
+| 符号 | 名称 | 定义 / 含义 | 落盘字段 |
+|---|---|---|---|
+| $N_t$ | 表行数 | owner 表 $t$ 的总行数 | `num_rows` |
+| $S_{\text{realized}}(t,\ell)$ | **采样行数(采样数)** | 档 $\ell$ 实际采多少行 $=\min(S_{\ell},N_t)$ | `sample_rows_per_level` |
+| $f_{t,\ell}$ | 采样比例 | $S_{\text{realized}}/N_t$ | （可派生） |
+| $\text{truth}_q$ | 查询真值 | 该查询真正命中的行数 | `actual` |
+| $\lambda_q(t,\ell)$ | **期望捕获量** | $\lambda=f_{t,\ell}\cdot\text{truth}_q$：查询命中的行指望在样本里出现几次 | `lambda_expected` |
+| **fidelity** | 可信性判定 | 由 λ 高低得出：λ≪1→不可信；λ≫1→保真 | 无独立字段（看 λ） |
+
+要点：**λ 不是"采样数"**——它是"采样比例 × 查询真值"的交互量（还依赖 truth，是逐查询
+的量）；只有在大表上真值刚好等于全表采样那档时才和采样数同量级。**fidelity 也不是 λ 本身**，
+而是对 λ 落在哪一侧的**可信性判定**（代码落盘的是 `lambda_expected`；fidelity 是从 λ 推得的
+结论，没有独立字段）。
 
 - $\lambda\ll 1$：单次采样**很可能根本看不到**驱动该查询的组合 → 实测 q-error **高方差 /
   不可信**（配合 `qerror_std`/`qerror_worst`；重复测 1 次以上时取保守值而非乐观均值）。
