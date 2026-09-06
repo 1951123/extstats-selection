@@ -77,10 +77,11 @@ def test_measure_dominant_pair_helps_on_correlated_query(backend):
     cands = [c for c in generate_candidates_per_query([q], arities=(2,))[q.qid]
              if set(c.columns) == {"iRspouse", "iWork89"}]
     assert cands, "dominant pair candidate required"
-    # measure at capacity level 2 -> Oracle estimate_percent=100 (full sample),
-    # so the dominant pair's column-group histogram is accurate on the sparse
-    # combo. (L0=1% sampling is too coarse for a 45-row target.)
-    mes = measure_query(backend, q, cands, capacity_levels=(2,))
+    # measure at both S-grid levels. On climate (~2.46M) L1=300k rows (~12%) is
+    # the deepest tier the S-grid realizes (the old 100% fix was dropped), and
+    # even L0=30k already gives the dominant-pair histogram enough of the sparse
+    # 45-row target to make its q-error near-faithful vs the grossly-off base.
+    mes = measure_query(backend, q, cands, capacity_levels=(0, 1))
     assert mes.estimate_base > 0
     assert len(mes.candidates) == 1
     for cm in mes.candidates.values():
@@ -116,7 +117,7 @@ def test_list_stats_empty_baseline(backend):
 @_NEED_OR
 def test_maint_tiers_monotonic(backend):
     tiers = backend.table_maintain_tiers(".climate")
-    assert len(tiers) == 3  # ladder levels 0,1,2
+    assert len(tiers) == 2  # S-grid ladder levels 0,1 (fixed-% L2 dropped)
     assert all(tiers[i] < tiers[i + 1] for i in range(len(tiers) - 1))
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     assert backend.stat_maintain_var(

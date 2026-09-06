@@ -13,8 +13,10 @@ from extstats2.core.queries import BenchQuery
 
 
 def test_supported_benches_match_v2_scope():
-    # v2 drops JOB; supports Census + stats_CEB + its single-table sub-plans.
-    assert set(supported_benches()) == {"census", "stats_ceb", "stats_ceb_single"}
+    # v2 drops JOB; supports Census + stats_CEB + its single-table sub-plans,
+    # plus the dmv workload added for the multi-engine (PG+Oracle) study.
+    assert set(supported_benches()) == {
+        "census", "dmv", "stats_ceb", "stats_ceb_single"}
 
 
 def test_census_query_count_and_shape():

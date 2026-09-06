@@ -81,19 +81,20 @@ def test_measure_records_lambda_and_variance(backend):
     q = load_benchmark("census")[61]  # query.62: truth=45, very sparse
     cands = [c for c in generate_candidates_per_query([q], arities=(2,))[q.qid]
              if set(c.columns) == {"iRspouse", "iWork89"}]
-    mes = measure_query(backend, q, cands, capacity_levels=(0, 1, 2),
+    # measure at both S-grid levels (L0=30k, L1=300k rows on climate ~2.46M).
+    mes = measure_query(backend, q, cands, capacity_levels=(0, 1),
                         repeats=2, capabilities=["mcv"])
     assert len(mes.candidates) == 1
     cm = next(iter(mes.candidates.values()))
     lam = {lvl: lv["lambda_expected"] for lvl, lv in cm.levels.items()}
     assert all(lv["lambda_expected"] is not None for lv in cm.levels.values())
-    assert lam[0] < lam[2]          # deeper sampling => higher expected capture
-    assert lam[2] > 1.0             # full scan captures the combo many times
+    assert lam[0] < lam[1]          # deeper sampling => higher expected capture
     for lv in cm.levels.values():
         assert "qerror_std" in lv and "qerror_worst" in lv
-    # backend sampling contract
+    # backend sampling contract (both L0 and L1 realized on climate)
     assert backend.num_rows(".climate") is not None
-    assert backend.sample_rows_per_level(".climate", 2) is not None
+    assert backend.sample_rows_per_level(".climate", 0) is not None
+    assert backend.sample_rows_per_level(".climate", 1) is not None
 
 
 @_NEED_PG
@@ -114,7 +115,7 @@ def test_create_size_drop_roundtrip(backend):
 def test_table_maintain_tiers_monotonic(backend):
     """Per-table fixed cost ladder must increase monotonically with tier."""
     tiers = backend.table_maintain_tiers(".climate")
-    assert len(tiers) == 3  # ladder levels 0,1,2
+    assert len(tiers) == 2  # S-grid ladder levels 0,1 (L2 dropped)
     assert all(tiers[i] < tiers[i + 1] for i in range(len(tiers) - 1))
     assert backend.stat_maintain_var(
         StatObject(table=".climate", columns=("a", "b"),
@@ -124,27 +125,31 @@ def test_table_maintain_tiers_monotonic(backend):
 
 
 @_NEED_PG
-def test_table_maintain_tiers_match_measured_fixed_analyze(backend):
-    """The per-tier fixed base should reproduce measured bare-ANALYZE times
-    (Census climate, warm) within tolerance."""
+def test_table_maintain_tiers_match_model(backend):
+    """The per-tier fixed base matches the calibrated linear model on Census
+    climate (target < N/300 saturates): = w_per_target * target, two tiers."""
     tiers = backend.table_maintain_tiers(".climate")
-    # tiers indexed by level -> target 100/1000/10000
-    measured = {0: 0.25, 1: 2.59, 2: 20.55}
-    for lvl, tgt in measured.items():
-        assert tiers[lvl] == pytest.approx(tgt, rel=0.35), (
-            f"level {lvl}: model {tiers[lvl]:.2f} vs measured {tgt}"
-        )
-    # Saturation: highest tier << pure-linear w*t (=25.6s)
-    assert tiers[2] < backend._W_PER_TARGET * 10000.0 * 0.95
+    assert len(tiers) == 2
+    for lvl, target in ((0, 100), (1, 1000)):
+        # climate N=2.46M -> t_sat~8200 >> 1000, so pure linear region
+        w = backend._W_PER_TARGET
+        assert tiers[lvl] == pytest.approx(w * target), (
+            f"level {lvl}: model {tiers[lvl]:.3f} vs linear {w*target:.3f}")
 
 
 @_NEED_PG
 def test_capacity_ladder_mapping(backend):
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
-    for lvl, expected in [(0, 100), (1, 1000), (2, 10000)]:
+    # S-grid ladder: L0->100 (S=30k), L1->1000 (S=300k); L2 (10000) dropped.
+    for lvl, expected in [(0, 100), (1, 1000)]:
         obj = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
                          capacity=Capacity(lvl))
         assert backend._native_target(obj.capacity) == expected
+    # level outside the S-grid must raise (not silently build off-ladder)
+    obj = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
+                     capacity=Capacity(2))
+    with pytest.raises(KeyError):
+        backend._native_target(obj.capacity)
 
 
 @_NEED_PG
@@ -158,10 +163,10 @@ def test_single_col_pin_and_sample_floor(backend):
     """
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     obj = StatObject(table=".climate", columns=("iAvail", "iClass"),
-                     capability=mcv, capacity=Capacity(2),  # target 10000
+                     capability=mcv, capacity=Capacity(1),  # S-grid L1, target 1000
                      name="ext_m_pin_test")
     backend.create_stat(obj)
-    backend.build_stats([obj], Capacity(2))
+    backend.build_stats([obj], Capacity(1))
     try:
         # (a) regular single column stays pinned at 100 even after a 10000 build
         with backend.conn.cursor() as cur:
