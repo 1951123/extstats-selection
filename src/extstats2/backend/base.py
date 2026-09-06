@@ -317,8 +317,9 @@ class Backend(ABC):
 
         ``None`` on engines (PG) that realize λ via a single-column *target*
         rather than a percent; Oracle returns its ``estimate_percent`` (1/10/100).
-        Recorded in ``per_lambda`` ``_meta.json`` so the same abstract λ level
-        maps to a backend-specific sampling knob for cross-backend comparison.
+        Recorded in the corpus ``_meta.json`` (results/measure) so the same
+        abstract λ level maps to a backend-specific sampling knob for
+        cross-backend comparison.
         """
         return None
 
