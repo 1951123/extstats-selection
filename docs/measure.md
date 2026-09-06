@@ -135,7 +135,7 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 | bench | owner 表 | 语义 | PG | Oracle |
 |---|---|---|---|---|
 | census | `climate` | 宽表，458 谓词 query 系 | ✅ 已测 | ⏳（早前 ORA 清理后待重测） |
-| stats_CEB(single) | stats_CEB 子计划表 | 多表 join 式 workload 的单表子计划 | ✅ 已测 | ✅ 已测 |
+| stats_CEB(single) | stats_CEB 子计划表 | 多表 join 式 workload 的单表子计划 | ✅ 已测 | ✅ 已测，**但分块见 §4.2** |
 | dmv | dmv 主表 | 窄表、大量坏尾需高 arity | ✅ 已测 | ⏳ 进行中（serial） |
 
 > 行数以 **ok_files（候选可用）** 为口径，见下节。Oracle 侧单 DB → 覆盖会落后于 PG。
@@ -156,6 +156,27 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 - **dmv**：总可改进条数最多（L1 1718/1926），修不动的 2col 反例 18 条为 **one-stat
   sufficiency 的边界反例**（需 >2 列 / 更深采样），量化后的 exact 样本以数据为准。
 
+### 4.2 Oracle stats_CEB_single 的引擎边界分块（timestamp-range 基线塌陷）
+
+**不把 `stats_CEB_single` 的 Oracle "✅ 已测"当"健康可量化"。** 诊断（2026-09-06）表明：该
+oracle 语料约有一半查询的**自然基线塌陷**，是 **Oracle CBO 引擎边界**，不是测量 bug、重跑也
+修不掉。判别特征 = 谓词里是否含**近唯一高基数 TIMESTAMP 列的 range**（`CreationDate/… BETWEEN
+或 ≤/≥ ... ::timestamp`）：
+
+| oracle stats_CEB_single 子集 | 查询数 | 基线 q-error(mean/max) | 诊断 |
+|---|---|---|---|
+| 含 `::timestamp` range | 117 | ~245 / 1770（L0≡L1，结构性） | **engine-boundary**：Oracle CBO 单列近唯一时间列 range 估塌 ~400x，column-group/ext 不参与 range(同 `deploy` 引擎边界族)，不可修 |
+| 不含 timestamp range | 63 | 1.65 / 4.61 | 健康、可量化（候选都能实际改进/评估） |
+
+证据要点：好坏被 timestamp-range 100% 切分；`st.129`(users) PG baseline est≈38931(q≈1.0) vs
+Oracle est≈98(q≈399)，同一 `::timestamp` range；L0 与 L1 读数相同；独立两次测量复现。
+（pg 侧 stats_ceb_single 无此问题——PG `mcv`/范围估计正常，故 §4.1 的 PG 语料数字成立。）
+
+**对 oracle 该 bench 的 L2/L3 口径**：做 Oracle stats_CEB_single 的优化/部署时，必须以
+**不含 timestamp-range 那 63 条**为可量化分母（或把 117 条标 engine-boundary 单独呈报），
+否则任何 Oracle 均线都会被钉在 ~160 的假基线。分层对照(Oracle vs PG)时此为**引擎不对称项**
+(应写为 Oracle 范围谓词机制边界，而非统计选择失败)。
+
 ## 5. candidate-bearing 报告分母
 
 报告指标只对**该查询实际有候选可用（arity-2 列组 ∩ workload 可见）**的查询统计，
@@ -171,5 +192,8 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 
 - **Oracle**：census、dmv 的 S-grid 已测/进行中分布见上表；Oracle 侧需在单 DB 上
   串行补齐，且 `tiers`/`est%` 按每 owner 表（`table_s_rows`）口径。
+- **Oracle stats_CEB_single = 引擎边界分块（§4.2）**：117 条 timestamp-range 是 Oracle
+  CBO 单列时间列 range 的基线上限，**不可由重测/扩列修复**；其 L2/L3 必须以剔除该 117 的
+  63 条（或不含 timestamp-range 子集）为可信分母，勿把坏块计入 Oracle 均线。
 - **λ 待复测项**：本设计在部分 bench 上若需"高 arity / 更深采样"才可修的反例，
   需要额外候选集；现状是 arity-2 + L0/L1 已落地，更高档为下一步（对齐 optimize）。
