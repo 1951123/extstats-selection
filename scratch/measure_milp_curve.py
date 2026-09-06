@@ -123,8 +123,9 @@ def _point(B, res):
             "maint_sec": float(res.total_maint) if res.total_maint is not None else None}
 
 
-def _build(blocks, level):
-    return build_inner_at_level(blocks, level, skip_worse_than_baseline=True)
+def _build(blocks, level, qt=None):
+    return build_inner_at_level(blocks, level, skip_worse_than_baseline=True,
+                                qid_table=qt)
 
 
 def storage_curve(blocks, level, grid):
@@ -166,18 +167,27 @@ def baseline_of(blocks, level):
 
 def maint_multitable(blocks, level, grid, mp=None):
     """stats_CEB_single maintenance curve: enumerates active-table subsets; each
-    active table t pays its measured fixed(t, level) once; per-stat marginal uses
-    the (closed-form) var approx (per-stat table attribution is not on the λ row).
+    active table t pays its measured fixed(t, level) once, and each selected stat
+    is charged its OWN measured c_var(table(t), level) (via per-query qid->table),
+    so the additive var sum over a subset is Σ_t c_var(t,ℓ)·n_t — per-table real.
     """
-    phys, opts, qb = _build(blocks, level)
     Q = load_benchmark("stats_ceb_single")
     qt = {q.qid: qtab(q) for q in Q}
-    qids = list(blocks); q_table = [qt[q] for q in qids]
+    qids = list(blocks)
+    # build with qid->table so each PhysicalStat carries its real owner table
+    phys, opts, qb = _build(blocks, level, qt)
+    q_table = [qt[q] for q in qids]
     base_by_q = {qid: float(b) for qid, b in zip(qids, qb)}
     base_mean = float(np.mean(list(base_by_q.values())))
 
     def _fx_meas(t, lv):
         return _fixed_of(mp, t, lv, fixed_stceb)
+
+    def _cv_meas(t, lv):
+        return _cvar_of(mp, t, lv, lambda tbl, ll: 0.02 * (TARGET[int(ll)] / 1000.0))
+
+    # attach each stat its measured per-table c_var (frozen -> replace, order kept)
+    phys = [replace(p, maint_cost=_cv_meas(p.table, int(level))) for p in phys]
 
     rows = []
     for M in grid:

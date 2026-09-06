@@ -47,12 +47,20 @@ def build_inner_at_level(
     level: str,
     *,
     skip_worse_than_baseline: bool = True,
+    qid_table: Optional[dict] = None,
 ) -> tuple[list, list, list]:
     """Build (phys_stats, queries_options, qbase_per_query) for one λ ``level``.
 
     Mirrors :func:`optimize.build_problem` but per-λ: the baseline for each query
     is that λ's no-ext baseline, and physical stats are (table, colset) each at a
     representation ``param`` (quantised into ``PhysicalStat.level`` = the param).
+
+    ``qid_table`` (optional): ``{qid: table}`` for multi-table workloads. The λ
+    slots carry candidate *columns* but not a per-row table, so without it all
+    stats are tagged ``table=""`` (single-table assumption). When supplied, each
+    candidate's table is taken from its owning query and physical stats are keyed
+    by ``(table, cols, param)`` so a multi-table problem gets per-table stats (and
+    per-table measured maintenance can be attached).
     """
     stat_index: dict[str, int] = {}
     phys_stats: list[PhysicalStat] = []
@@ -71,6 +79,7 @@ def build_inner_at_level(
         if base != base:      # NaN baseline (e.g. est/0 when truth==0) -> skip
             continue
         qbase_list.append(base)
+        qtable = (qid_table or {}).get(qid, "")
         opts: list[Option] = []
         for cd in slot.get("candidates", []):
             cols = tuple(sorted(cd["cols"]))
@@ -78,13 +87,13 @@ def build_inner_at_level(
             qerr = float(cd["qerror"])
             if skip_worse_than_baseline and qerr >= base:
                 continue
-            table = ""  # candidates carry cols; table not stored per row -> derive from columns only (single-table bench)
-            # NB: single-table benchmark => table not in row; treat as one table.
-            key = f"{'|'.join(cols)}|P{param}"
+            table = qtable
+            # key by (table, cols, param) so different tables never share a stat
+            key = f"{table}|{'|'.join(cols)}|P{param}"
             if key not in stat_index:
                 stat_index[key] = len(phys_stats)
                 phys_stats.append(PhysicalStat(
-                    table=table if table else "", columns=cols,
+                    table=table, columns=cols,
                     level=param, cost=int(cd["size_bytes"]),
                     maint_cost=float(cd.get("maint_var", 0.0)),
                 ))
