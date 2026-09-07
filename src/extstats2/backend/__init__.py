@@ -4,8 +4,6 @@ Each concrete backend implements :class:`extstats2.backend.base.Backend` (and,
 for PostgreSQL's catalog-mask protocol, :class:`extstats2.backend.catalog.CatalogDriver`).
 
 - ``postgres.py``: PostgreSQL 16 backend (Protocol-A + Protocol-M acceleration).
-  Direct port of v1's ``measure.py`` / ``measure_mask.py`` / ``estimate.py`` /
-  ``stats.py``, refactored onto the backend abstraction.
 - ``oracle.py``: Oracle backend using ``DBMS_STATS`` column-group statistics and
   the universal Protocol-A (no catalog-mask).
 """

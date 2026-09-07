@@ -1,13 +1,12 @@
 """PostgreSQL 16 backend (Milestone M2 — real implementation).
 
-Ports v1's PostgreSQL-specific logic onto the v2 backend abstraction:
+Implements the v2 backend abstraction for PostgreSQL:
 
-- cardinality estimation via ``EXPLAIN (FORMAT JSON)`` (was ``estimate.py``),
-- ``CREATE / DROP / ALTER STATISTICS`` DDL and ``ANALYZE`` (was ``stats.py`` +
-  ``measure.py``),
-- per-object on-disk size via ``pg_statistic_ext_data`` (was ``measure.stat_size_bytes``),
-- Protocol-A isolation (drop/rebuild); Protocol-M catalog-mask is a later
-  enhancement over ``pg_statistic_ext_data`` (was ``measure_mask.py``),
+- cardinality estimation via ``EXPLAIN (FORMAT JSON)``,
+- ``CREATE / DROP / ALTER STATISTICS`` DDL and ``ANALYZE``,
+- per-object on-disk size via ``pg_statistic_ext_data``,
+- Protocol-A isolation (drop/rebuild); Protocol-M catalog-mask acceleration
+  over ``pg_statistic_ext_data``,
 - a fixed + variable maintenance-cost model for ``maintain_cost``.
 
 All PostgreSQL-specific SQL and catalog knowledge lives here (never in ``core/``).
@@ -86,9 +85,8 @@ _ROW_KEY = "Plan Rows"
 # ---------------------------------------------------------------------------
 # Protocol-M (catalog-mask) primitives — PostgreSQL
 #
-# Port of v1's ``measure_mask.py`` low-level helpers onto the v2 StatObject /
-# capability abstraction. Protocol-M avoids a per-candidate ANALYZE: all of a
-# table's candidate extended statistics are built by ONE ANALYZE; each is then
+# Protocol-M avoids a per-candidate ANALYZE: all of a table's candidate
+# extended statistics are built by ONE ANALYZE; each is then
 # measured by NULL-masking every *other* statistic's payload in
 # ``pg_statistic_ext_data`` and EXPLAINing (a NULL payload makes the planner
 # ignore the statistic, without error). Payloads are backed up to a temporary
@@ -112,12 +110,11 @@ _ROW_KEY = "Plan Rows"
 class PgPayloadBackup:
     """NULL-maskable snapshot of a set of extended-statistic payloads.
 
-    Mirrors v1 ``measure_mask.py``: objects are grouped by capability kind and
-    their ``pg_statistic_ext_data`` payload rows copied into per-kind temporary
-    tables typed to the payload column's own type (``pg_mcv_list`` & friends,
-    which have no bytea cast). Masking NULLs the live payload; restoring
-    ``UPDATE ... SET col = backup.payload ...`` is type-safe and done entirely
-    server-side.
+    Objects are grouped by capability kind and their ``pg_statistic_ext_data``
+    payload rows copied into per-kind temporary tables typed to the payload
+    column's own type (``pg_mcv_list`` & friends, which have no bytea cast).
+    Masking NULLs the live payload; restoring ``UPDATE ... SET col =
+    backup.payload ...`` is type-safe and done entirely server-side.
     """
 
     def __init__(self, conn: Connection, objs: list[StatObject], prefix: str):
@@ -734,7 +731,7 @@ class PostgresBackend(Backend):
 
 
 # ---------------------------------------------------------------------------
-# Estimation helpers (ported from v1 estimate.py)
+# Estimation helpers
 # ---------------------------------------------------------------------------
 
 def _clean_table(table: str) -> str:

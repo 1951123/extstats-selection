@@ -24,7 +24,7 @@ def get_backend(name: str, **kwargs):
     """Return a concrete backend instance by name.
 
     Importing the concrete backend module happens here, at the edge of the
-    program, so ``core/`` and ``plan/`` never import a backend directly.
+    program, so ``core/`` never imports a backend directly.
     """
     if name == "postgres":
         from .backend.postgres import PostgresBackend
@@ -41,8 +41,8 @@ def get_backend(name: str, **kwargs):
 # The current / canonical S-grid / lambda-first model keys sampling by the
 # REQUESTED sample rows S_L per level L (the old v1 "capacity level -> native
 # knob" 3-level ladder was removed — single-version policy).
-#   * Only TWO levels today:  L0 -> 30k rows, L1 -> 300k rows (project scope;
-#     L2/full-scan was dropped for speed, restore by adding a level if needed).
+#   * Two levels today:  L0 -> 30k rows, L1 -> 300k rows (project scope;
+#     extend by adding further entries to SAMPLING_LEVELS if needed).
 #   * Per (owner) table the actually sampled rows are
 #         S_realized(t, L) = min(S_L, N_t)
 #     (small/mid tables saturate at N_t; large tables get the two distinct S).
@@ -120,9 +120,6 @@ class Config:
     bench: str = "census"
     budget_bytes: int = 0              # storage budget; 0 = unlimited
     maint_budget: Optional[float] = None  # maintenance budget; None/0 = unconstrained
-    objective: str = "mean"            # reporting/eval metric label only (NOT an
-                                       # optimizer objective; worst/p90/geomean are
-                                       # derived metrics, not selectable by the MILP)
     capacities: tuple[int, ...] = (0, 1)   # S-grid sampling level indices (L0/L1);
                                     # maps to requested rows via SAMPLING_LEVELS
     db: DBConfig = field(default_factory=DBConfig.from_env)

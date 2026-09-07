@@ -82,10 +82,10 @@ def default_measure_capabilities(caps: list["Capability"]) -> list[str]:
 class Capacity:
     """An abstract capacity level.
 
-    ``level`` is a *level index* into a backend's capacity ladder
-    (e.g. ``(100, 1000, 10000)`` for PG ``statistics_target``). The core never
-    interprets the numeric value; it only passes it through so the backend can
-    map it to a native parameter.
+    ``level`` is a *level index* a backend maps onto its native parameter value
+    (PG single-column ``statistics_target``, Oracle sample rows / bucket size).
+    The core never interprets the numeric value; it only passes it through so
+    each backend can translate it into its own representation.
 
     ``label`` is optional and used for result metadata / reporting.
     """

@@ -17,8 +17,8 @@ Design goals
    is an optional acceleration; a backend declares support via
      :meth:`Backend.supports_catalog_mask` and overrides :meth:`Backend.isolate`.
 
-   Protocol-A cost accounting (one measured (candidate, level) — see
-   ``core/measure.py``): ``build`` is the ONLY sampling scan — PG issues one
+   Protocol-A cost accounting (one measured (candidate, level)):
+   ``build`` is the ONLY sampling scan — PG issues one
    ANALYZE (``build_stats``), Oracle one GATHER_TABLE_STATS that both creates and
    materialises its column groups. ``create`` is DDL-only (PG) / a no-op (Oracle);
    ``measure`` = ``estimate`` (EXPLAIN, no scan) + ``stat_size_bytes`` (catalog
@@ -29,10 +29,10 @@ Design goals
    not a second pass for the candidate being measured, and only triggers when
    such surrounding state actually needs putting back.
 
-These types replace the PostgreSQL-specific plumbing in v1
-(``measure.py``, ``measure_mask.py``, ``estimate.py``, ``stats.py``, the
-``pg_statistic_ext_data`` catalog reads): the SQL / catalog knowledge now lives
-inside each backend, not in the shared core.
+These types centralize the engine-specific SQL / catalog knowledge (DDL,
+sampling realization, estimate read-out, catalog access) inside each backend so
+the shared core stays backend-agnostic; nothing in ``core/`` reaches into a
+backend's native internals.
 """
 
 from __future__ import annotations
@@ -232,8 +232,8 @@ class Backend(ABC):
 
         ``query.sql`` is a ``SELECT COUNT(*) ... WHERE ...`` benchmark query; the
         backend rewrites it to ``SELECT * ...`` so the top-level plan rows equal
-        the filtered input cardinality (same trick as v1 ``estimate.py``), then
-        reads the estimate from its native plan output.
+        the filtered input cardinality, then reads the estimate from its native
+        plan output.
         """
 
     # -- catalog -----------------------------------------------------------
@@ -312,7 +312,8 @@ class Backend(ABC):
         """The engine's native percent-of-scan that realizes λ at ``level``.
 
         ``None`` on engines (PG) that realize λ via a single-column *target*
-        rather than a percent; Oracle returns its ``estimate_percent`` (1/10/100).
+        rather than a percent; Oracle overrides to return its per-table
+        ``estimate_percent = 100·min(S,N)/N``.
         Recorded in the corpus ``_meta.json`` (results/measure) so the same
         abstract λ level maps to a backend-specific sampling knob for
         cross-backend comparison.

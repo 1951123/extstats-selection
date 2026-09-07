@@ -109,11 +109,11 @@ $$\min_{\text{可行解 } S}\, \text{workload-measure}(S).$$
 
 ```
 src/extstats2/
-├── core/       数据库无关算法核心：candidates(列组合) · measure(调度) ·
-│               optimize(MILP) · build/estimate(经 backend 抽象)
+├── core/       数据库无关算法核心：candidates(列组合) · measure_lambda(λ-first
+│               测量/协议-M) · optimize(MILP 双regime) · predicates/queries ·
+│               maint_fit / maint_model(维护费建模)
 ├── backend/    后端抽象：base(接口/性质契约) · capabilities(统计能力模型) ·
 │               postgres(PG16) · oracle(23ai)
-├── plan/       测量协议：protocol_a(通用逐候选隔离) · protocol_m(mask 加速, 仅 PG)
 ├── bench/      基准加载 census/stats_ceb(stats_CEB)/stats_ceb_single + 镜像管理
 ├── cli.py / config.py
 ```

@@ -44,21 +44,16 @@ from .queries import BenchQuery
 # lambda below 30000 (that would drive single columns below the default 100 and
 # degrade the base/fidelity).
 #
-# NOTE (2026-09-03): the param grid is NO LONGER a single cross-backend list.
-# It is per-backend representation sampling points (PG = its native scalar
-# ``attstattarget`` range; Oracle = an engine-faithful tiny grid, see
-# ``Backend.representation_param_tiers``). ``DEFAULT_PARAM_TIERS`` is kept only
-# as a PG-flavoured fallback; callers should pass ``param_tiers=None`` to use
-# the active backend's own grid. It is a DENSE general grid (see PG docstring):
-# measurement does not pre-trim from hindsight; each λ caps it via S/300 and the
-# optimizer dominance-prunes synonyms at solve time.
-DEFAULT_PARAM_TIERS: tuple[int, ...] = (5, 10, 25, 50, 100, 250, 500, 1000,
-                                        2500, 5000, 10000)
+# The representation-param grid is per-backend sampling points (PG = its native
+# scalar ``attstattarget`` range; Oracle = an engine-faithful tiny grid, see
+# ``Backend.representation_param_tiers``). Callers pass ``param_tiers=None`` to
+# use the active backend's own grid. The grid is dense (not pre-trimmed from
+# hindsight): each λ caps it via S/300 and the optimizer dominance-prunes
+# synonyms at solve time.
 
-#: Active experiment λ-tiers during the fast-measurement phase. L2 (full scan,
-#: ~22 s/gather on Oracle) is dropped for now to keep experiments fast; it can be
-#: restored later by passing ``levels=(0, 1, 2)`` when a deterministic absolute
-#: baseline / final paper figures are needed.
+#: Active experiment λ-tiers (scan-depth indices into the backend ladder). The
+#: two levels L0/L1 realize requested sample rows 30k / 300k (see config
+#: ``SAMPLING_LEVELS``); the canonical drivers in scratch/ pass these by default.
 DEFAULT_LAMBDA_LEVELS: tuple[int, ...] = (0, 1)
 
 
@@ -94,7 +89,7 @@ def measure_query_lambda(
 
     ``param_tiers=None`` uses the active backend's own representation grid
     (:meth:`Backend.representation_param_tiers`); levels default to
-    :data:`DEFAULT_LAMBDA_LEVELS` (L2 off during the fast-experiment phase)."""
+    :data:`DEFAULT_LAMBDA_LEVELS` (the L0/L1 scan-depth tiers)."""
     cap_obj = _primary_capability(backend)
     by_lambda: dict[str, dict] = {}
     # Determine the query table from the first candidate (single-table benchs).
@@ -301,7 +296,7 @@ def measure_workload_lambda(
     and backend (``<outdir>/measure/<workload>/<backend>/``) so neither workload
     nor DBMS engine (which may hold the same columns but different native params)
     collide. ``param_tiers=None`` records the active backend's own representation
-    grid; levels default to :data:`DEFAULT_LAMBDA_LEVELS` (L2 off). When
+    grid; levels default to :data:`DEFAULT_LAMBDA_LEVELS` (L0/L1). When
     ``use_protocol_m`` is true and the backend can catalog-mask, per-query
     measurement uses :func:`measure_query_lambda_m` (one shared ANALYZE per λ)
     instead of per-candidate Protocol-A.

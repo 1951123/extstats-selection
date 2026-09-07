@@ -6,8 +6,9 @@ distinct-value caps, histogram-type bucket ceilings). If raising `param` no
 longer raises the realized `num_buckets` / improves the estimate, that tail of
 the PG param grid is "wasted" on Oracle => the grid is not well-suited.
 
-Method: on CLIMATE, at a fixed deep λ (L2 = estimate_percent 100), build one
-column group (DINCOME3, DTRAVTIME) at SIZE p for p in DEFAULT_PARAM_TIERS; after
+Method: on CLIMATE, at a fixed deep λ (sample depth 100%), build one
+column group (DINCOME3, DTRAVTIME) at SIZE p for p in [25, 50, 100, 1000, 10000];
+after
 each, read back the *realized* num_buckets (USER_TAB_COL_STATISTICS on the hidden
 extension col) and the query.62 cardinality estimate; drop. Table shows where it
 saturates.
