@@ -74,6 +74,48 @@ def capacity_ladder(backend: str) -> dict[int, dict]:
 
 
 # ---------------------------------------------------------------------------
+# S-grid sampling levels (CANONICAL truth for the lambda-first design)
+# ---------------------------------------------------------------------------
+# The current / canonical S-grid / lambda-first model keys sampling by the
+# REQUESTED sample rows S_L per level L, NOT by an abstract "capacity level"
+# (the legacy CAPACITY_LADDERS above is kept only for old evaluators/scratch).
+#   * Only TWO levels today:  L0 -> 30k rows, L1 -> 300k rows (project scope;
+#     L2/full-scan was dropped for speed, restore by adding a level if needed).
+#   * Per (owner) table the actually sampled rows are
+#         S_realized(t, L) = min(S_L, N_t)
+#     (small/mid tables saturate at N_t; large tables get the two distinct S).
+#   * Each backend maps the SAME realized-S to its native parameter:
+#         PG      : statistics_target = S_L / 300   (=> single_col target 100/1000)
+#         Oracle  : estimate_percent   = 100 * S_realized(t,L) / N_t
+#     (precisely what core.measure_lambda / the backend lambda_S helpers drive).
+#
+# The active lambda tier indices used by core.measure_lambda are the SAME
+# DEFAULT_LAMBDA_LEVELS=(0,1); they are kept there (not referenced into a
+# backend-importing module) to avoid a config<->core import cycle.
+SAMPLING_LEVELS: dict[int, int] = {
+    0: 30000,     # L0 : requested sample rows
+    1: 300000,    # L1 : requested sample rows
+}
+
+def sampling_requested_rows(level: int) -> int:
+    """Requested sample rows S_L for S-grid ``level`` (canonical, per design doc)."""
+    if level not in SAMPLING_LEVELS:
+        raise KeyError(
+            f"sample level {level!r} not in the S-grid SAMPLING_LEVELS "
+            f"{sorted(SAMPLING_LEVELS)} (L0=30000, L1=300000)."
+        )
+    return SAMPLING_LEVELS[level]
+
+# Realized sample rows on a table with ``n_rows`` rows at S-grid ``level``.
+def realized_sampling_rows(level: int, n_rows: int) -> int:
+    return min(sampling_requested_rows(level), int(n_rows))
+
+# PG statistics_target realizing S_L (== S_L / 300 -> 100 @ L0, 1000 @ L1).
+def pg_target_for_sampling(level: int) -> int:
+    return max(1, int(sampling_requested_rows(level) / 300))
+
+
+# ---------------------------------------------------------------------------
 # DB connection (backend-specific defaults, overridable via env)
 # ---------------------------------------------------------------------------
 
