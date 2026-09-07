@@ -78,7 +78,7 @@ def main() -> None:
     qb = [float(v) for v in qbases]
     res = solve_ilp(phys, opts, qb, a.budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,
-                    per_query_cap=1, objective="mean")
+                    per_query_cap=1)
     # per-query predicted in build_inner qid order = blocks insertion order
     qids_solve = list(blocks.keys())
     pred = {q: float(qv) for q, qv in zip(qids_solve, res.qerror_per_query)}

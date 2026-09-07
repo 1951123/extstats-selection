@@ -27,7 +27,7 @@ def load_ctx(level="1", budget=100000):
     phys, opts, qbases = build_inner_at_level(blocks, level, skip_worse_than_baseline=True)
     res = solve_ilp(phys, list(opts), [float(v) for v in qbases], budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,
-                    per_query_cap=1, objective="mean")
+                    per_query_cap=1)
     chosen_colsets = {tuple(ps.columns): ps.level for ps in res.selected_stats}
     cols_order = sorted(chosen_colsets.keys())
     corpus = ROOT / "results" / "measure" / "census" / "postgres"

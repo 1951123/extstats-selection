@@ -34,6 +34,12 @@ $$\tfrac1{|Q|}\sum_{i\in Q}\log e_i\;=\;\log\!\Big(\prod_i e_i\Big)^{\!1/|Q|}\;=
 $\text{geo}$/$\max$ 则是在该选中集上算出的**派生报告指标**（几何/最大），**不进入** cap=1
 的 MILP 目标——报告时三者都给出、都以 candidate-bearing 查询为分母（见 §2-§4 表、measure §5）。
 
+> **优化目标由档而非开关决定；不存在 worst-case/最小化最大化优化。** 求解器没有
+> `objective` 选择开关——cap=1 走 sparse-linear 精确算术均值、cap>1/None 走乘性几何
+> 代理，由 `optimizer_class`/cap 决定（`solve_ilp` 已去掉一个曾会让 reviewer 误以为支持
+> worst/geomean 选择的 `objective` 参数）。`p90`/`worst`/`geo`(最大) 都只作为**求解后的
+> 派生评估指标**从 `qerror_per_query` 计算，绝不改变求解本身。
+
 ### 1.1 符号定义
 
 | 符号 | 含义 | 备注 |

@@ -22,8 +22,6 @@ import numpy as np
 from .measure_lambda_io import list_qids, read_meta, read_query_measure, result_dir
 from .optimize import (Option, OptimizerClass, PhysicalStat, solve_ilp)
 
-OBJECTIVE_MEAN = "mean"
-
 
 def load_lambda_problem(outdir: Path, workload: str, backend: str):
     """Load a workload's saved per-λ results as (meta, per_query_blocks)."""
@@ -106,11 +104,13 @@ def build_inner_at_level(
 
 
 def inner_optimal_at_level(blocks, level, budget_bytes, *,
-                           objective=OBJECTIVE_MEAN,
                            maint_budget: Optional[float] = None,
                            ) -> tuple[Optional[ILPResult], list, list]:
     """Solve the inner selection at one λ under a storage (``budget_bytes``)
     and, optionally, a maintenance budget (``maint_budget``) hard constraint.
+
+    Always the cap=1 / exact arithmetic-mean formulation (SPARSE_LINEAR); the
+    optimization objective is fixed — no objective switch here.
 
     With ``maint_budget=None`` the maintenance cost is reported but NOT enforced
     (counted in ``res.total_maint``). When set, ``sum_s maint_cost(s)*y_s <= M``
@@ -123,7 +123,7 @@ def inner_optimal_at_level(blocks, level, budget_bytes, *,
     res = solve_ilp(phys, opts, qbases, budget_bytes,
                     maint_budget=maint_budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,
-                    per_query_cap=1, objective=objective)
+                    per_query_cap=1)
     return res, phys, qbases
 
 

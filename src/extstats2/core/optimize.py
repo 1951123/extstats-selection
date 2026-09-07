@@ -63,9 +63,10 @@ from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
 
-# Optimizer classes (see docs/architecture.md §1.9).  The class is chosen by
-# the backend's *decisive* structural dimensions; the objective is an instance
-# parameter within the class.
+# Optimizer classes (see docs/architecture.md §1.9).  The class encodes the
+# objective SEMANTICS: SPARSE_LINEAR == exact arithmetic mean (cap=1), while
+# MULTIPLICATIVE == geometric-mean surrogate (cap>1/None).  There is no separate
+# "objective" runtime switch; worst/p90/geomean are evaluation-only metrics.
 class OptimizerClass:
     """Enum-like constants for the two MILP classes."""
     # Sparse-linear MILP: per-query at most one statistic, objective exactly
@@ -77,10 +78,16 @@ class OptimizerClass:
     MULTIPLICATIVE = "multiplicative"
 
 
-# Objective aggregation inside a chosen class (instance parameter).
-OBJECTIVE_MEAN = "mean"
-OBJECTIVE_GEOMEAN = "geomean"
-OBJECTIVE_WORST = "worst"
+# ---------------------------------------------------------------------------
+# Optimization objective is NOT a runtime switch here: it is fully determined by
+#   per_query_cap == 1 + SPARSE_LINEAR  -> exact arithmetic-mean objective;
+#   per_query_cap > 1 / None + MULTIPLICATIVE -> geometric-mean surrogate.
+# There is deliberately NO min-max / worst-case optimization objective.  ``p90``,
+# ``worst`` and ``geo``/``geomean(pop)`` are EVALUATION METRICS computed AFTER a
+# solve is returned (derived reporting), never optimization objectives.  Only the
+# ``mean``/geometric pairwise names below label what the successful class actually
+# solves; no caller can select a "worst-case solver" because none exists.
+# ---------------------------------------------------------------------------
 
 # Slack on the multiplicative surrogate-floor rows.  Set to 0 so a selection that
 # *exactly* reaches the q-error floor (surrogate == 1, e.g. one stat fully fixing
@@ -262,23 +269,17 @@ def _overlap_pairs(query_options: list[Option], phys_stats: list[PhysicalStat]):
                 yield a, b
 
 
-def select_optimizer_class(props, objective: str = OBJECTIVE_MEAN) -> str:
-    """Soft-select the optimizer *class* from a backend's structural contract (§1.9).
+def select_optimizer_class(props) -> str:
+    """Select the optimizer *class* from a backend's structural contract (§1.9).
 
-    The class is chosen by the *decisive* dimensions only:
-      - sparse_one_stat -> SPARSE_LINEAR (exactly-linear objective)
-      - else            -> MULTIPLICATIVE (log-space additive approximation)
+    The class is chosen by the *decisive* structural dimensions only:
+      - sparse_one_stat -> SPARSE_LINEAR  (per-query cap=1, exact arithmetic mean)
+      - else            -> MULTIPLICATIVE (per-query cap>1/None, geometric mean)
 
-    The requested ``objective`` (mean/geomean/worst/p90) is an *instance*
-    parameter: it must be in ``props.supports_objectives``, but it does not
-    change the class. Raises ``ValueError`` when the objective is unsupported
-    (a hard error, so we never silently solve with a mistrusted objective).
+    There is no objective argument: the optimization objective is determined by
+    the class (cap=1 exact-arithmetic vs cap>1 geometric-surrogate).  Worst/p90/
+    geomean are evaluation metrics computed after solving, not selectable here.
     """
-    if objective not in (props.supports_objectives or ()):
-        raise ValueError(
-            f"objective={objective!r} not in backend supports_objectives "
-            f"{props.supports_objectives}"
-        )
     return OptimizerClass.SPARSE_LINEAR if props.sparse_one_stat else OptimizerClass.MULTIPLICATIVE
 
 
@@ -292,7 +293,6 @@ def solve_ilp(
     per_query_cap: Optional[int] = None,
     global_disjoint: bool = False,
     optimizer_class: str = OptimizerClass.MULTIPLICATIVE,
-    objective: str = OBJECTIVE_MEAN,
 ) -> ILPResult:
     """Solve the multi-select shared-resource ILP with scipy.optimize.milp.
 
@@ -307,22 +307,21 @@ def solve_ilp(
         matching prior behaviour and preserving backward compatibility.
       - If neither is set, no maintenance constraint is added.
 
-    ``optimizer_class`` selects the MILP class (§1.9) and therefore the objective
-    SEMANTICS (do not conflate):
-      - ``OptimizerClass.MULTIPLICATIVE`` (default, per_query_cap=None or K>1):
-        geometric-mean surrogate.  Objective = min sum_i log \\hat e_i with
-        \\hat e_i = e_i^0 * prod_s (e_is/e_i^0)^{x_is}; each surrogate is
-        constrained >= 1 (linear per-query floor row), so solver objective
-        equals the final decode and never optimises a below-1 product.  Combine
-        only non-overlapping stats (Option A, independence model).
-      - ``OptimizerClass.SPARSE_LINEAR`` (per_query_cap=1): EXACT arithmetic-mean
-        objective max sum_{i,s} (e_i^0 - e_is) x_is — one stat per query, so the
-        arithmetic mean is exactly linear.  Not a geometric/geomean objective.
-    ``objective`` (mean/geomean/worst/p90) is a *requested reporting aggregation
-    tag*; it is validated against the backend's ``supports_objectives`` but does
-    NOT change the surrogate/functional above (the MILP class decides mean-exact
-    vs geometric).  ``objective="geomean"`` is only meaningful together with
-    ``OptimizerClass.MULTIPLICATIVE``.  Defaults preserve backward compatibility.
+    ``optimizer_class`` selects the MILP class (§1.9), which FULLY determines the
+    optimization objective (there is no separate objective switch):
+      - ``OptimizerClass.MULTIPLICATIVE`` (default; combine with per_query_cap
+        None or K>1): GEOMETRIC-mean surrogate.  Objective = min sum_i log \\hat
+        e_i with \\hat e_i = e_i^0 * prod_s (e_is/e_i^0)^{x_is}; each surrogate is
+        constrained >= 1 (linear per-query floor row), so solver objective equals
+        the final decode and never optimises a below-1 product.  Combine only
+        non-overlapping stats (Option A, independence model).
+      - ``OptimizerClass.SPARSE_LINEAR`` (use with per_query_cap=1): EXACT
+        arithmetic-mean objective max sum_{i,s} (e_i^0 - e_is) x_is — one stat per
+        query, so the arithmetic mean is exactly linear.  Not geometric.
+
+    There is intentionally NO worst-case / min-max objective.  ``p90``, ``worst``
+    and ``geo`` are EVALUATION METRICS a caller may compute from the returned
+    ``qerror_per_query`` AFTER solving; they never alter the solve itself.
     """
     n_stats = len(phys_stats)
     n_opt = sum(len(opts) for opts in queries_options)

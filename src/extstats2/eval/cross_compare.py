@@ -111,9 +111,11 @@ def _measure_backend(backend_name: str, queries, k: int,
     return be, results, n_measured
 
 
-def _run_ilp(backend, results, budget_bytes, objective="mean",
-             maint_budget=None):
+def _run_ilp(backend, results, budget_bytes, maint_budget=None):
     """Run the shared core ILP over one backend's measurements (all mcv L0).
+
+    The optimization objective is fixed by the solver class (cap=1 / exact
+    arithmetic-mean via SPARSE_LINEAR here); there is no objective switch.
 
     ``maint_budget`` is None by default -> no maintenance constraint (pure
     storage-budget selection). When a finite budget is given, we pass both the
@@ -122,12 +124,13 @@ def _run_ilp(backend, results, budget_bytes, objective="mean",
     per activated table).
     """
     from ..core.optimize import (
-        MaintProfile, build_problem, select_optimizer_class, solve_ilp)
+        OptimizerClass, MaintProfile, build_problem, select_optimizer_class,
+        solve_ilp)
 
     phase1 = {"results": results}
     phys_stats, queries_options, qerror_base = build_problem(phase1, qerror_mode="first")
     props = backend.structural_props()
-    opt_class = select_optimizer_class(props, objective)
+    opt_class = select_optimizer_class(props)
     # solve_ilp enforces `sum cost <= budget`, so `0` does NOT mean "unlimited";
     # map an unlimited/0 request to a large-but-finite budget.
     eff_budget = budget_bytes if budget_bytes and budget_bytes > 0 else (1 << 60)
@@ -138,7 +141,6 @@ def _run_ilp(backend, results, budget_bytes, objective="mean",
             profile.table_base_tiers[t] = backend.table_maintain_tiers(t)
     # The sparse-linear class materialises its exactly-linear objective via the
     # per-query "at most one statistic" cap; pass per_query_cap=1 for it.
-    from ..core.optimize import OptimizerClass
     per_query_cap = 1 if opt_class == OptimizerClass.SPARSE_LINEAR else None
     res = solve_ilp(
         phys_stats, queries_options, qerror_base,
@@ -147,7 +149,6 @@ def _run_ilp(backend, results, budget_bytes, objective="mean",
         maint_profile=profile,
         per_query_cap=per_query_cap,
         optimizer_class=opt_class,
-        objective=objective,
     )
     return backend, res
 

@@ -8,9 +8,6 @@ v1 was already generic (``optimize.py`` is an unchanged port).
 from .candidates import CandidateSet, generate_candidates, generate_candidates_per_query
 from .measure import measure_query
 from .optimize import (
-    OBJECTIVE_GEOMEAN,
-    OBJECTIVE_MEAN,
-    OBJECTIVE_WORST,
     ILPResult,
     MaintProfile,
     OptimizerClass,
@@ -33,9 +30,6 @@ __all__ = [
     "PhysicalStat",
     "MaintProfile",
     "OptimizerClass",
-    "OBJECTIVE_MEAN",
-    "OBJECTIVE_GEOMEAN",
-    "OBJECTIVE_WORST",
     "build_problem",
     "solve_ilp",
     "select_optimizer_class",

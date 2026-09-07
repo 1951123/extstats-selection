@@ -25,8 +25,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--maint-budget", type=float, default=None,
                    help="maintenance budget for the ILP (None/0=unconstrained)")
     p.add_argument("--objective", default="mean",
-                   choices=["mean", "geomean", "worst", "p90"],
-                   help="objective aggregation (must be in backend supports_objectives)")
+                   choices=["mean"],
+                   help="evaluation metric shown (worst/p90/geomean are computed "
+                        "as derived reporting metrics, NOT selectable optimization "
+                        "objectives; the MILP objective is fixed by cap)")
     p.add_argument("--capacities", type=int, nargs="+", default=[0, 1, 2],
                    help="abstract capacity level indices to probe")
     p.add_argument("--protocol", choices=["a", "m", None], default=None)
@@ -49,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         backend = config.get_backend(cfg.backend)
         props = backend.structural_props()
-        opt_class = select_optimizer_class(props, cfg.objective)
+        opt_class = select_optimizer_class(props)
         print(f"backend      : {backend.name()}")
         print(f"capabilities : {[str(c) for c in backend.supported_capabilities()]}")
         print(f"protocol     : {backend.protocol(cfg.protocol)} (requested={cfg.protocol})")

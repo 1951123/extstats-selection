@@ -50,7 +50,7 @@ def build_and_solve(level: str, budget: int, disjoint: bool = False):
     qb = [float(v) for v in qbases]
     res = solve_ilp(phys, opts, qb, budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,
-                    per_query_cap=1, objective="mean", global_disjoint=disjoint)
+                    per_query_cap=1, global_disjoint=disjoint)
     return blocks, res, phys, qbases
 
 

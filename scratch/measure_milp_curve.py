@@ -19,7 +19,7 @@ JSON (one file per backend+bench+budget kind):
   }
 File: results/curves/{backend}/milp_{storage|maint}_sgrid_{bench}.json
 
-All solves: cap=1 one-stat, SPARSE_LINEAR, objective=mean, candidate-bearing set.
+All solves: cap=1 one-stat, SPARSE_LINEAR (exact arithmetic-mean objective),
   storage : budget = stored-bytes cap (maint unconstrained).
   maint   : budget = refresh-seconds; per refresh each ACTIVATED table pays its
             fixed shared-scan cost once + per-stat var. [PG-modelled; maint on
@@ -125,7 +125,7 @@ def _solve(phys, opts, qb, storage_b, maint_b):
     return solve_ilp(phys, opts, [float(v) for v in qb], storage_b,
                      maint_budget=maint_b,
                      optimizer_class=OptimizerClass.SPARSE_LINEAR,
-                     per_query_cap=1, objective="mean")
+                     per_query_cap=1)
 
 
 def _point(B, res):

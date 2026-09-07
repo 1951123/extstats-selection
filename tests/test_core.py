@@ -12,7 +12,6 @@ import pytest
 
 from extstats2.config import get_backend
 from extstats2.core.optimize import (
-    OBJECTIVE_MEAN,
     ILPResult,
     MaintProfile,
     OptimizerClass,
@@ -271,10 +270,17 @@ def test_select_optimizer_class_sparse_vs_multiplicative():
         StructuralProps(sparse_one_stat=False)) == OptimizerClass.MULTIPLICATIVE
 
 
-def test_select_optimizer_class_objective_mismatch_errors():
+def test_select_optimizer_class_has_no_objective_knob():
+    """The optimizer-class selector no longer accepts an ``objective`` argument:
+    the optimization objective is fixed by the class (cap=1 exact-arithmetic vs
+    cap>1 geometric-surrogate). Worst/p90 are evaluation metrics only and were
+    never selectable as optimization objectives here.
+    """
     from extstats2.backend.base import StructuralProps
-    props = StructuralProps(supports_objectives=("mean",))
-    with pytest.raises(ValueError):
+    props = StructuralProps(sparse_one_stat=True)
+    # objective was a vestigial validation-only param; removed -- passing it now
+    # fails loudly rather than silently pretending worst/geomean are supported.
+    with pytest.raises(TypeError):
         select_optimizer_class(props, objective="worst")
 
 

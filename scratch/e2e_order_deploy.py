@@ -36,7 +36,7 @@ def main(level: str, budget: int, db: str, table: str, deploy: bool, out: Path):
     qb = [float(v) for v in qbases]
     res = solve_ilp(phys, opts, qb, budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,
-                    per_query_cap=1, objective="mean")
+                    per_query_cap=1)
     chosen_stats = res.selected_stats          # list[PhysicalStat]
     cols2id = {}                               # (table,columns)-> phys index used in build_inner
     n_stats = len(phys)

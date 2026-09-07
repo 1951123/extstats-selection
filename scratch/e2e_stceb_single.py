@@ -42,7 +42,7 @@ def main(level, budget, db, table_for_meta, out, strategy="naive"):
     meta, blocks = load_lambda_problem(ROOT/"results"/"measure", "stats_ceb_single", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, str(level), skip_worse_than_baseline=True)
     res = solve_ilp(phys, list(opts), [float(v) for v in qbases], budget,
-                    optimizer_class=OptimizerClass.SPARSE_LINEAR, per_query_cap=1, objective="mean")
+                    optimizer_class=OptimizerClass.SPARSE_LINEAR, per_query_cap=1)
     pred = res.mean_qerror
     qids_order = list(blocks.keys())
     pred_by_qid = {qid: float(qv) for qid,qv in zip(qids_order, res.qerror_per_query)}
