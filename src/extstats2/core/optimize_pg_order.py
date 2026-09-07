@@ -1,4 +1,11 @@
-"""PG-specific OID-order selector, Phase 2 (two-phase design).
+"""PG-specific OID-order selector (deployment-stage concern, NOT the generic
+core optimizer).  The chosen-stat SET comes from the frozen generic optimizer
+(optimize.py / optimize_lambda.build_inner_at_level); THIS module only orders
+CREATE (OID) for PG deployment so each query is served by its best applicable
+chosen statistic under PG's first-applicable-by-OID planner semantics.  Kept as
+a deploy-layer concern (see docs/deploy.md), algorithm still valid.
+
+PG-specific OID-order selector, Phase 2 (two-phase design).
 
 Phase 1 = the *generic* optimiser (untouched, ``optimize.py`` /
 ``optimize_lambda.build_inner_at_level``): it selects a (colset, param) SET under

@@ -1,4 +1,11 @@
-"""Measurement scheduler (backend-oblivious).
+"""LEGACY measurement scheduler — old v1 / capacity-era contract, NOT the
+S-grid canonical path.  This measures one no-extstext baseline + candidate x
+abstract capacity level (v1 contract).  It is retained for the legacy
+v1-compatible evaluators (eval/cross_*), migration comparison, and older scratch
+scripts; the CURRENT canonical S-grid / lambda-first measurement lives in
+core.measure_lambda (+ measure_lambda_io).  Prefer measure_lambda for new code.
+
+Measurement scheduler (backend-oblivious).
 
 v1 had two hard-coded, PostgreSQL-tied measurement engines (``measure.py`` for
 Protocol-A, ``measure_mask.py`` for Protocol-M) that both reached into PG catalogs

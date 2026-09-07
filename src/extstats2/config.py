@@ -39,6 +39,18 @@ def get_backend(name: str, **kwargs):
 # Capacities
 # ---------------------------------------------------------------------------
 
+# LEGACY — old v1 "capacity level -> native knob" ladder with THREE levels
+# (PG statistics_target 100/1000/10000; Oracle estimate_percent 1/10/100).
+# The CURRENT canonical S-grid / lambda-first design has exactly TWO sampling
+# levels, L0=30000 / L1=300000 requested rows, realized per (owner) table as
+#   S_realized(t, L) = min(S_L, N_t),
+# with each backend mapping that realized S to its native parameter itself
+# (PG: statistics_target = S_L/300; Oracle: estimate_percent = 100*S/N_t).
+# This legacy ladder is kept for the old capacity-era evaluators / scratch and
+# migration; the S-grid source of truth is driven from measure_lambda's lambda
+# levels (see docs/measure.md §1 / config DEFAULT_LAMBDA_LEVELS in
+# core/measure_lambda).  Prefer those over this ladder for new code.
+#
 # Canonical capacity ladders, one per backend, mapping abstract level index ->
 # native parameter(s).  Level indices are what the core / ILP sees.
 CAPACITY_LADDERS: dict[str, dict[int, dict]] = {

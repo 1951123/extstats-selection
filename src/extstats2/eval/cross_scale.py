@@ -1,4 +1,8 @@
-"""Scaled cross-backend validation (M4 — larger N, Protocol-A default).
+"""LEGACY M4 scaled cross-backend validation (old capacity era; defaults to
+Protocol-A at capacity level 0, statistics_target=100).  Historical / reference,
+not the current S-grid evaluation path.
+
+Scaled cross-backend validation (M4 — larger N, Protocol-A default).
 
 Two stages:
 

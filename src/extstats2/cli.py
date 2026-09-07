@@ -1,4 +1,11 @@
-"""CLI entry point for the v2 toolkit (skeleton).
+"""CLI entry point (LEGACY old-capacity scaffold; only `check` is wired).
+
+This shell still models the old v1 pipeline (`generate -> measure -> optimize
+-> verify`) and exposes `--capacities 0 1 2`; it is NOT the current S-grid /
+lambda-first pipeline CLI (the real experiment drivers live in scratch/, e.g.
+measure_sgrid.py).  Kept only as a thin backend/config validation shell.
+
+CLI entry point for the v2 toolkit (skeleton).
 
 Pipeline matches v1: ``generate -> measure -> optimize -> verify``, but every
 step is backend-agnostic via :func:`extstats2.config.get_backend`.

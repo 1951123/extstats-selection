@@ -1,8 +1,11 @@
 """extstats2.core — database-agnostic algorithm core.
 
 These modules depend only on :mod:`extstats2.backend.base` abstract types and
-never import a concrete backend.  The core is intentionally v1-compatible where
-v1 was already generic (``optimize.py`` is an unchanged port).
+never import a concrete backend.  NOTE: `measure_query` re-exported here is the
+LEGACY v1/capacity-era measurement (core/measure.py); the CURRENT canonical
+S-grid / lambda-first measurement & outer selection live in
+core/measure_lambda (+ measure_lambda_io) and core/optimize_lambda, which are
+NOT package-level re-exports yet (see core/legacy-cleaning batch-1 design).
 """
 
 from .candidates import CandidateSet, generate_candidates, generate_candidates_per_query

@@ -1,4 +1,8 @@
-"""Cross-backend focused validation (M4) — dominant correlated column-group.
+"""LEGACY M4 cross-backend focused validation (old capacity era; see
+cross_compare/cross_scale).  Historical / reference measurement, not the current
+S-grid evaluation path.
+
+Cross-backend focused validation (M4) — dominant correlated column-group.
 
 On census queries with genuinely high *single-column* baseline q-error (the
 multi-column strongly-correlated / very-sparse ones), PG and Oracle are each

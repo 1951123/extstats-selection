@@ -1,4 +1,9 @@
-"""Cross-backend validation (M4).
+"""LEGACY M4 cross-backend validation (old capacity-level era, uses
+core.measure + capacity level 0).  It answers an old question (do PG & Oracle
+behave alike under 1-column-group, capacity-level-0 one-stat repair); it is NOT
+the current S-grid evaluation path.  Keep for reference / historical comparisons.
+
+Cross-backend validation (M4).
 
 Runs the *same* core phases on the same underlying data through two different
 backends (PostgreSQL + Oracle) and compares the results, to demonstrate that
