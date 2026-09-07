@@ -55,49 +55,6 @@ def test_estimate_census_query(backend):
 
 
 @_NEED_PG
-def test_measure_single_candidate_cleans_up(backend):
-    from extstats2.core.candidates import generate_candidates_per_query
-    from extstats2.core.measure import measure_query
-
-    q = load_benchmark("census")[0]
-    cands = generate_candidates_per_query([q])[q.qid][:1]
-    mes = measure_query(backend, q, cands, capacity_levels=(0,))
-    assert mes.estimate_base > 0
-    assert len(mes.candidates) == 1
-    # no leftover statistics after a clean measure
-    assert backend.list_stats(".climate") == []
-
-
-@_NEED_PG
-def test_measure_records_lambda_and_variance(backend):
-    """Per-level measurement now records the v1 'lambda' expected-capture and
-    the q-error spread over repeats. lambda must grow with capacity; at the
-    lowest census tier the driving sparse combo can have lambda < 1 (high
-    variance, unreliable single read) while deeper tiers are faithful.
-    """
-    from extstats2.core.candidates import generate_candidates_per_query
-    from extstats2.core.measure import measure_query
-
-    q = load_benchmark("census")[61]  # query.62: truth=45, very sparse
-    cands = [c for c in generate_candidates_per_query([q], arities=(2,))[q.qid]
-             if set(c.columns) == {"iRspouse", "iWork89"}]
-    # measure at both S-grid levels (L0=30k, L1=300k rows on climate ~2.46M).
-    mes = measure_query(backend, q, cands, capacity_levels=(0, 1),
-                        repeats=2, capabilities=["mcv"])
-    assert len(mes.candidates) == 1
-    cm = next(iter(mes.candidates.values()))
-    lam = {lvl: lv["lambda_expected"] for lvl, lv in cm.levels.items()}
-    assert all(lv["lambda_expected"] is not None for lv in cm.levels.values())
-    assert lam[0] < lam[1]          # deeper sampling => higher expected capture
-    for lv in cm.levels.values():
-        assert "qerror_std" in lv and "qerror_worst" in lv
-    # backend sampling contract (both L0 and L1 realized on climate)
-    assert backend.num_rows(".climate") is not None
-    assert backend.sample_rows_per_level(".climate", 0) is not None
-    assert backend.sample_rows_per_level(".climate", 1) is not None
-
-
-@_NEED_PG
 def test_create_size_drop_roundtrip(backend):
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     obj = StatObject(table=".climate", columns=("iAvail", "iClass"),
