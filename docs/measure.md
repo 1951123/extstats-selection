@@ -130,6 +130,45 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 测量在**候选级 skips**、只测该 bench 实际会出现/需要的候选，避免测出"永不被
 单独使用"的死候选。
 
+## 3.1 维护成本模型：measured-linear + `_maint.json` 伪影
+
+「该统计的维护秒」不是逐候选单独计时（单扩展统计在共享扫描下是微小、可翻转残差，
+不可靠计时），而是用一个**实测线性模型**离线拟合，存成语料伪影，供 optimize 的 maint
+轴消费：
+
+$$ \mathrm{maint}=\sum_{t\,\in\,T_{\text{active}}}\big[\,\mathrm{fixed}(t,\ell_t)
+   +c_{\mathrm{var}}(t,\ell_t)\cdot n_t\,\big],
+   \qquad \ell_t=\text{表 }t\text{ 被激活到的最高档},\ n_t=\text{该表选中统计数}. $$
+
+- $\mathrm{fixed}(t,\ell)$：表 $t$ 在档 $\ell$ **刷新一次的实测共享扫描秒**（裸表、该档
+  realized-$S$ 下，PG `ANALYZE` / Oracle `GATHER_TABLE_STATS`）。整表扫描成本 ⇒ 只与表+采样
+  深度有关，故按 $(t,\ell)$ 存。
+- $c_{\mathrm{var}}(t,\ell)$：表 $t$ 在档 $\ell$ 的**每扩展统计边际**（该表各统计等价），由
+  整表扫描差的聚合除以探针数得出。同样按 $(t,\ell)$ 存。
+
+**伪影与口径**（不在 source 里写死常数）：
+- 存于 `results/measure/<bench>/<backend>/_maint.json`（与 `_meta.json` 同级）：
+  `{backend, fixed_seconds:{<表>:{<档>:秒}}, c_var:{<表>:{<档>:秒}}}`；表键用语料点号形
+  （`.climate`），载入时归一化小写（`.postHistory`↔`.posthistory` 通配）。
+- **measured-or-raise（强制口径，2026-09-06）**：用维护成本约束前必须先实测 `_maint.json`
+  且该 $(t,\ell)$ 已测，否则抛 `MaintNotMeasuredError`——无闭式回退。核心库
+  `maint_model.py` 拥有 schema/IO/线性数学（DB-free、可单测）；DB-timed 拟合在各独立驱动
+  （PG `core/maint_fit.py`、Oracle `core/maint_fit_oracle.py`）。`list_qids` 把 `_maint` 视同
+  `_meta` 跳过，不当成 query 结果。
+
+**拟合口径（PG/Oracle 同构，n=0-vs-n=k）**：
+- `fixed(t,ℓ)`：丢弃残余探针后取**裸表**在该档 $S$ 下多次刷新的中位秒（n=0 态）。
+- `c_var(t,ℓ)`：建该表**不同 2 列组**为探针（k≤cap，默认 100，列数<2 时后=0），
+  先物化、再测维护这些组的一次刷新中位；$c_{\mathrm{var}}=(\text{with-}k-\text{fixed})/k$，
+  下限非零（0.001s，避免噪声归零）。组用完即删（恢复自然态）。
+
+**实测值例（S-grid，PG）**：
+- census `.climate`：fixed L0≈0.286s / L1≈2.92s（10×采样 → ~10× 门槛）；c_var L0≈0.0013 /
+  L1≈0.037。
+- dmv `.dmv`：fixed L0≈12.0s / L1≈12.5s——11.6M 冷缓存大表整块扫描主导、target 不变，
+  **实测 fixed 两档几乎平坦**（表尺寸所限的真实 S-grid-case-1 行为，非模型失败）；
+- stats_CEB_single 各 owner 表：按各自 N 属小/中/大表，fixed 相应（见 §1.1 表行数三分类）。
+
 ## 4. 语料与引擎覆盖矩阵
 
 | bench | owner 表 | 语义 | PG | Oracle |

@@ -13,8 +13,10 @@ q-error；决策 = 创建哪些 (列组,cap) $y$ + 每条 query 用哪个 $x$；
 稀疏、已创建才可选、以及一条 budget。budget 有两条正交轴：
 
 - **storage**（`unit=bytes`）：统计对象占用；
-- **maint**（`unit=seconds-per-refresh`）：部署后刷新一次的总代价，由**表激活固定
-  档**（per-table base，`fixed_sec`）+ **每统计可加变动**构成（Y-two-layer）。
+- **maint**（`unit=seconds-per-refresh`）：部署后刷新一次的总代价 = **实测线性模型**
+  $\sum_{t}\big[\mathrm{fixed}(t,\ell_t)+c_{\mathrm{var}}(t,\ell_t)\cdot n_t\big]$（每激活表
+  fixed 一次 + 每统计变动；参数按 (表,档) 实测存 `_maint.json`，见 §1.2 的维护成本模型说明与
+  measure §3.1）。
 
 level L0/L1 各自给出一条曲线（同一 bench 同一采样态内）。
 
@@ -42,7 +44,8 @@ $\text{geo}$/$\max$ 则是在该选中集上算出的**派生报告指标**（�
 | $O_i$ | 查询 $i$ 可用的候选集（$C_s\subseteq$ 查询谓词列） | 决定 candidate-bearing |
 | $e_{is}$ | 查询 $i$ 若单独由 $s$ 服务时的 q-error | 同 realized-S 量得 |
 | $c_s$（storage） | $s$ 的存储字节 | budget 轴一 |
-| $c_s^{\mathrm{var}}$ / $B_t[\ell]$（maint） | $s$ 的每统计变动秒；表 $t$ 达最高档 $\ell$ 的一次性固定秒 | Y-two-layer；budget 轴二 |
+| $c_s^{\mathrm{var}}$ = $c_{\mathrm{var}}(t_s,\ell_s)$（maint） | $s$ 的**实测**每统计变动秒，按 $s$ 的 (表, 档) 归属 | 见下方**维护成本模型** |
+| $B_t[\ell]$ = $\mathrm{fixed}(t,\ell)$（maint） | 表 $t$ 刷新一次的**实测**一次性固定秒（该档 $S$ 下共享扫描成本） | 见下方**维护成本模型** |
 | $y_s\in\{0,1\}$ | 是否创建统计 $s$ | 物理创建（跨 query 共享） |
 | $x_{is}\in\{0,1\}$ | 查询 $i$ 是否选用 $s$ | 仅当 $s\in O_i$ |
 
@@ -67,12 +70,13 @@ $$
 \qquad \Delta_{is}=e_i^0-e_{is}\,(\ge0).
 $$
 
-公共约束：
+公共约束（选一个预算轴施加；storage 与 maint 正交）：
 
 $$
 \begin{aligned}
 &\text{(storage)}\quad \sum_{s} c_s\,y_s \le C_{bytes};\\[1pt]
-&\text{(maint,\ Y-two-layer)}\quad \sum_{t} B_t\!\big[\max_{s\in S\,:\,t_s=t}\ell_s\big]+\sum_{s} c_s^{\mathrm{var}}\,y_s \le M_{\text{sec}};\\[1pt]
+&\text{(maint,\ measured-linear)}\quad \sum_{t\in T_{\text{active}}} \Big[\,\mathrm{fixed}(t,\ell_t)+c_{\mathrm{var}}(t,\ell_t)\,n_t\,\Big] \le M_{\text{sec}};\\[1pt]
+&\qquad \ell_t=\max\{\ell_s\,:\,t_s=t,\ y_s=1\},\quad n_t=\#\{s\,:\,t_s=t,\ y_s=1\};\\[1pt]
 &\text{(select ⟸ created)}\quad x_{is}\le y_s,\ \ \forall\, i,\ s\in O_i;\\[1pt]
 &\text{(overlap-free 保独立性)}\quad x_{ia}+x_{ib}\le 1 \ \ \forall i,\ a\ne b\in O_i,\ C_a\cap C_b\ne\varnothing;\\[1pt]
 &\text{(同列组至多一档)}\quad \sum_{\ell:\ (t_s,C_s,\ell)} y_{t_s,C_s,\ell}\le 1\ \ \forall (t_s,C_s);\\[1pt]
@@ -82,9 +86,20 @@ $$
 $$
 
 说明：
-- **maint 约束里的 max 是非线性的**，代码用表激活指示（阶梯档 $w_{t,\ell}$）线性化：
-  $M_{\text{sec}}$ 对应 `maint` 轴（`unit=seconds-per-refresh`），每表中被激活到最高档只付
-  一次固定 `B_t[⋅]`（`fixed_sec`），再加选中统计的每统计变动 $c_s^{\mathrm{var}}$。
+- **维护成本模型（measured-linear）**：刷新一次的总代价是**实测线性模型**
+  $$\mathrm{maint}=\sum_{t\in T_{\text{active}}}\bigl[\mathrm{fixed}(t,\ell_t)+c_{\mathrm{var}}(t,\ell_t)\cdot n_t\bigr],$$
+  其中每表只在其**被激活到的最高档** $\ell_t$ 付一次实测 `fixed(t,ℓ)`（该 $S$ 下裸表的共享扫描
+  秒），再为该表的 $n_t$ 个选中统计各付实测的每统计变动 `c_var(t,ℓ)`。`fixed/c_var` **按
+  (table, level) 分别实测**，存于语料伪影
+  `results/measure/<bench>/<backend>/_maint.json`（schema
+  `{backend, fixed_seconds:{<表>:{<档>:秒}}, c_var:{...}}`），由核心库 `maint_model.py`
+  读写与提供纯线性访问器；每次刷新每表只付一次固定、变动按选中统计累计。
+  单表 bench（census/dmv）`fixed_sec` 即每档那一个 owner 表的 `fixed(t,ℓ)`；多表 bench
+  （stats_CEB_single）按**激活表子集**枚举，每激活表付它自己的 `fixed(t,ℓ)`，变动仍按
+  各统计真实所属表累计 ⇒ 单值 `fixed_sec=None`。
+- **measured-or-raise（强制口径）**：维护成本约束只允许在模型参数**已实测**后施加
+  （`_maint.json` 存在且该 (table,level) 已测）。缺文件或未测档会抛
+  `MaintNotMeasuredError`——无闭式回退。故每条 `maint` 曲线都以实测 `_maint.json` 喂养。
 - **两个预算轴正交**：想给哪个就施加哪条（storage 或 maint），不强制同时给。`optimize.md`
   下文的 storage 曲线 = 只施加 (storage)；maint 曲线 = 只施加 (maint)。
 - **cap=1（默认档）** 使目标从乘性近似退化为**精确线性**（见 architecture §2/§3）：$\min \sum_i(e_i^0-\sum_s\Delta_{is}x_{is})$，本仓各 bench 曲线即此档。
@@ -127,35 +142,48 @@ $$
 
 ## 4. maint 曲线（`results/curves/postgres/milp_maint_sgrid_<bench>.json`，unit=seconds-per-refresh）
 
-`fixed_sec` = 每表刷新一次的固定门槛（census/dmv：L0=0.256s、L1=2.56s；
-stats_ceb_single 无 fixed 固定，即无 per-table cost 序列）。≤8 s 内各档：
+maint 曲线以**实测** `_maint.json` 的 `fixed(t,ℓ)` / `c_var(t,ℓ)` 喂养
+（measured-or-raise：缺档抛 `MaintNotMeasuredError`）。**实测 fixed 门槛**（每表刷新一次的
+共享扫描秒）按档拉开，先在预算内付得起的档激活，再往上加统计：
+- census `.climate`：`fixed` L0=0.286s / L1=2.92s（L1 比 L0 高 ~10×，采样 10 倍）；
+- dmv `.dmv`：`fixed` **L0=12.0s / L1=12.5s**——DMV 11.6M 冷缓存大表，两档都是整块扫描
+  主导（target 不变），实测 fixed 几乎平坦（L0≈L1），即 DMV 的维护门槛不随采样档拉开
+  （表尺寸所限的真实行为，非模型失败）；
+- stats_CEB_single（多表）：`fixed_sec=None`（无单一 owner 表 fixed 序列），按**激活表
+  子集**计——每激活表付它自己的 `fixed(t,ℓ)`。
 
-| bench | L0@8s | L1@8s | 备注 |
-|---|---|---|---|
-| census | 1.654 | **1.405** | 需 ~4-8 s 才轮到 L1 划算(>2.56 fixed) |
-| dmv | 16.98 | **6.51** | L1 因其 per-stat 深采样仍把 36 组修到 6.51 |
-| stats_ceb_single | 1.094 | **1.082** | fixed 趋于无 → L1 收益很小但仍最优 |
+各 bench 实测可达（该 grid 内、付得起该档 fixed 时的 floor）：
+| bench | grid(秒) | L0 mean | L1 mean | 关键：fixed 门控 |
+|---|---|---|---|---|
+| census | 0.1–2.0 | 1.654(1.0s 即到) | 25.31（**未激活**） | L1 fixed 2.92s **> grid 上限 2.0s** → 付不起 L1，整档停在基线 |
+| dmv | 1–30 | 16.98(L0, M>12.0) | **6.51**(L1, M>12.5, 15s) | L1 fixed≈12.5s：到 ≤12s 两档都基线_only，付过 fixed 后 L1 把 36 组修到 6.51 |
+| stats_ceb_single | 0.05–3.0 | 1.094 | **1.082**(1.0s) | 无单一 fixed 门槛，L1 全表让 .posts+… 修到 1.082 |
 
-读法：维护预算很紧(<~2.5 s)时选 L0（fixed 便宜）；足够付 L1 的 base 后用 L1 更优
-（census 1.65→1.41）。maint 与 storage 曲线给出"同一质量可被存储或刷新预算哪个
-更便宜地买到"的对偶视角。
+读法：maint 预算先要付得起某档的 `fixed(t,ℓ)`（整表刷新一次），之后才为选中统计花
+`c_var·n`。grid 上限一但 < L1 fixed，L1 根本无法上桌（census 例：grid ≤2.0s < 2.92s → L1
+保持基线 25.31）。给了足够付 L1 fixed 的预算后，L1 因采样更深把同样的列组修得更狠。
+maint 与 storage 曲线给出"同一质量可被存储或刷新预算哪个更便宜地买到"的对偶视角。
 
 ## 5. argmin-over-level（选档决策）
 
 每条曲线按 budget 报"该 budget 下选 L0 还是 L1"，即逐预算 argmin 档：
-- 小预算（storage 数 KB / maint < fixed_L1≈2.56s）：L0；census L0 用小 budget 在
-  4.47(2KB) → 1.87(10KB) 一带，L1 要到 ~10-20KB 才反超。
-- 大预算：L1。census storage≥10KB 多给 L1（mean 1.88→1.40），maint≥~4s 给 L1
-  (1.53→1.41)。
+- maint 轴：预算 < 该档 `fixed(t,ℓ)` → 该档**付不起、停在基线**；恰付得起 L0 fixed 时
+  先选 L0；预算越过了 L1 fixed（如 census 需 >2.92s、dmv 需 >12.5s）后 L1 反超（dmv
+  M≥15s 选 L1→6.51；census grid 从未越 2.92s → 全程 argmin 停在 L0）。
+- storage 轴：小预算（数 KB）选 L0；census storage≥~10KB 后 L1 反超（mean 1.88→1.40），
+  dmv/stats L1 当预算足够时同样最优。
 
 exact points 在 json 的 `argmin_over_level`。通常论文叙述取"target budget B 下最优
 (L*, mean)"这条 argmin 曲线。
 
 ## 6. 结论性摘要（S-grid 重派生）
 
-1. 三 bench 的"要不要买深扩列"结论分化：census 值得(L1→1.40)；dmv **受候选数
-   (36) 与 arity-2 边界限制**、预算再多也停在 6.51(L1) / 17(L0)——扩更高 arity 才有
-   望突破；stats_ceb_single 已近健康(1.08)，selection 收益锚点低。
-2. storage 与 maint 两轴共同刻画"质量成本边界"；maint 需先付 per-table fixed，
-   故小刷新预算下 L0 为 pragma，L1 只在付得起 fixed 时赢。
+1. 三 bench 的"要不要买深扩列"结论分化（**storage 轴**视角）：census 值得(L1→1.40)；
+   dmv **受候选数(36) 与 arity-2 边界限制**、预算再多也停在 6.51(L1) / 17(L0)——扩更高
+   arity 才有望突破；stats_ceb_single 已近健康(1.08)，selection 收益锚点低。
+2. storage 与 maint 两轴共同刻画"质量成本边界"。**maint 轴先付 per-table 实测
+   fixed**：预算 < 该档 `fixed(t,ℓ)` 时该档根本付不起（census L1 fixed≈2.92s、dmv L1
+   fixed≈12.5s），故小刷新预算下 L0 为 pragma；L1 只在**付得起其实测 fixed 的预算**后才赢，
+   且其 L1 质量收益(storage 轴的 1.40/6.51 等)在 maint 轴上要额外叠加大约一整次整表刷新
+   的 fixed 才可达。
 3. argmin-over-level 提供逐预算可部署档，feeding deploy.md 的 L3。
