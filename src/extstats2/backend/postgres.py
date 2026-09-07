@@ -94,6 +94,18 @@ _ROW_KEY = "Plan Rows"
 # ignore the statistic, without error). Payloads are backed up to a temporary
 # table and restored in-place by same-type ``pg_mcv_list`` assignment (there is
 # no bytea cast for driver round-trip).
+#
+# Contrast — Protocol-A (the universal fallback this backend also provides,
+# see ``isolate`` / ``build_stats``): each measured (candidate, level) pays ONE
+# ANALYZE of its own table to materialise it ("build"). Removing that statistic
+# to get a no-extstat estimate is a pure DROP STATISTICS (catalog delete) — the
+# planner then reverts to the *still-present* single-column stats without any
+# re-ANALYZE; no second scan is spent re-materialising the candidate. A later
+# re-ANALYZE only happens to restore a table's OTHER, originally-present extended
+# statistics (or a fair natural single-column baseline), i.e. isolation cleanup,
+# not the candidate's own measurement. So Protocol-A is also "one materialising
+# ANALYZE per measured candidate"; Protocol-M just de-amortises many candidates
+# into shared scans.
 # ---------------------------------------------------------------------------
 
 

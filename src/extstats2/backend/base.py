@@ -17,6 +17,18 @@ Design goals
    is an optional acceleration; a backend declares support via
    :meth:`Backend.has_protocol_m` and overrides :meth:`Backend.isolate`.
 
+   Protocol-A cost accounting (one measured (candidate, level) — see
+   ``core/measure.py``): ``build`` is the ONLY sampling scan — PG issues one
+   ANALYZE (``build_stats``), Oracle one GATHER_TABLE_STATS that both creates and
+   materialises its column groups. ``create`` is DDL-only (PG) / a no-op (Oracle);
+   ``measure`` = ``estimate`` (EXPLAIN, no scan) + ``stat_size_bytes`` (catalog
+   read); there is NO second ANALYZE/GATHER to re-read the statistic.
+   "drop -> rebuild" is the isolation layer restoring the table's *other* pre-
+   existing statistics (or a fair natural single-column baseline via
+   ``restore_natural_stats``) after the measurement — it is environment restore,
+   not a second pass for the candidate being measured, and only triggers when
+   such surrounding state actually needs putting back.
+
 These types replace the PostgreSQL-specific plumbing in v1
 (``measure.py``, ``measure_mask.py``, ``estimate.py``, ``stats.py``, the
 ``pg_statistic_ext_data`` catalog reads): the SQL / catalog knowledge now lives
