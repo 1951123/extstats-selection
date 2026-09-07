@@ -1,50 +1,49 @@
-"""Phase-2 MILP: budgeted selection of (combo, capacity) options minimising
-q-error.  Direct port of v1 ``optimize.py`` — this model is backend-agnostic.
+"""Phase-2 MILP: budgeted selection of (combo, capacity) statistics minimising a
+workload-level q-error.  Backend-agnostic port of v1 ``optimize.py``.
 
-Two objective semantics, selected by the MILP class / per-query cap:
-  * per_query_cap=1 + SPARSE_LINEAR  -> EXACT arithmetic mean (linear Δ objective);
-  * per_query_cap=K>1 / None + MULTIPLICATIVE -> geometric-mean surrogate
-    (log-space additive objective); see the Objective note below the model block.
+This is a TWO-REGIME formulation.  The regime is fixed by the MILP class + the
+per-query capacity cap (never a runtime ``objective`` switch; p90/worst/geo are
+evaluation metrics computed AFTER a solve):
 
-Model (multi-select, multiplicative approximation for cap>1)
----------------------------------------------------------------
-For cap>1 a query may select several *non-overlapping* statistics.  The joint
-effect is approximated multiplicatively in log space:
+  * cap=1 + SPARSE_LINEAR      -> EXACT arithmetic-mean objective (linear);
+  * cap>1 / None + MULTIPLICATIVE -> geometric-mean surrogate (log-space).
 
-    log e_i(T_i) ≈ log e_i^0 + sum_{s in T_i} log(e_is / e_i^0)
+Regime 1 — cap == 1, exact arithmetic mean (SPARSE_LINEAR)
+-----------------------------------------------------------
+Each query picks AT MOST ONE statistic (sum_s x_is <= 1), so its achieved error
+is exactly linear:  e_i = e_i^0 - sum_s Δ_is x_is  with Δ_is = e_i^0 - e_is >= 0.
+Minimising the arithmetic mean of e_i is exactly maximising total linear
+improvement  sum_{i,s} Δ_is x_is.  This is an EXACT formulation (the overlap-free
+constraint is unnecessary here: choosing <= 1 stat already prevents picking two
+overlapping stats).
 
-To keep the independence / multiplicative approximation valid we forbid selecting
-column-overlapping statistics within a single query (Option A semantics — combine
-only independent, non-overlapping stats), and constrain each per-query surrogate
-product to stay >= 1.
+Regime 2 — cap>1 / None, geometric-mean surrogate (MULTIPLICATIVE)
+------------------------------------------------------------------
+A query may select several *non-overlapping* statistics (Option A semantics:
+independence premise).  The joint effect is a multiplicative workload surrogate,
+approximated additively in log space:
+
+    log \\hat e_i  ≈  log e_i^0 + sum_{s in T_i} log(e_is / e_i^0)
+
+with  \\hat e_i = e_i^0 prod_s (e_is/e_i^0)^{x_is}.  Minimising its log (== its
+geometric mean) is the objective.  Two integrity rows keep this honest:
+  - overlap-free within a query (x_ia + x_ib <= 1 when stats a,b share a column),
+    so the independence / multiplicative composition stays valid; and
+  - a per-query surrogate floor  \\hat e_i >= 1  (a linear row per query, see
+    below), so the solver never optimises an impossible below-1 product and the
+    solver objective equals the reported surrogate metric (no post-hoc clamp).
 
 Variables (all binary):
   - y_s : create physical statistic s (table, columns, capacity)
   - x_is: query i selects statistic s
 
-Objective — two well-separated semantics (never conflated):
-  * per_query_cap = 1  (SPARSE_LINEAR, exact):
-        min 1/n sum_i e_i   ==  max sum_{i,s} (e_i^0 - e_is) * x_is
-    Each query picks at most ONE stat, so e_i = e_i^0 - sum_s Δ_is x_is is
-    *exactly* linear (Δ_is = e_i^0 - e_is >= 0); minimising the arithmetic mean
-    is exactly maximising total linear improvement.  Exact formulation.
-  * per_query_cap = K>1 / None  (MULTIPLICATIVE, geometric surrogate):
-        min sum_i log \\hat e_i,   \\hat e_i = e_i^0 * prod_s (e_is/e_i^0)^{x_is}
-    The joint effect is a multiplicative composition; minimising its (log-space,
-    additive) surrogate is minimising the geometric mean of the surrogate q-error.
-    A query may select up to K (or arbitrarily many when None) *non-overlapping*
-    stats — Option A semantics: the multiplicative surrogate is an independence
-    model whose validity premise is that combined stats do not share columns
-    (see architecture.md §2/§3).  Each surrogate \\hat e_i is constrained >= 1
-    (a linear row per query), so the solver never optimises an impossible
-    below-1 product, keeping the solver objective identical to the final decode.
-
 Constraints:
   1) storage budget  : sum_s c_s * y_s <= C
   2) select created  : x_is <= y_s
-  3) overlap-free    : within each query, column-overlapping stats can't both
-                       be chosen (multiplicative/independence model, Option A)
-  4) surrogate floor : per query, log \\hat e_i >= 0 (i.e. \\hat e_i >= 1)
+  3) overlap-free    : within each query, column-overlapping stats can't both be
+                       chosen (regime 2 / multiplicative independence, Option A)
+  4) surrogate floor : per query, \\hat e_i >= 1  (==  log b_i + sum_s w_is x_is
+                       >= 0, a linear row; regime 2 only)
   5) level exclusivity: at most one capacity level per (table, columns)
   6) (optional) global disjointness: no two created stats share a column
 

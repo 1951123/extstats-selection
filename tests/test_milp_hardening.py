@@ -191,3 +191,83 @@ def test_maintenance_profile_must_cover_candidate_levels():
     with pytest.raises(ValueError):
         solve_ilp(phys, [opts], [base], budget_bytes=200,
                   maint_budget=200.0, maint_profile=prof)
+
+
+# ---------------------------------------------------------------------------
+# Model-level invariant tests (Reviewer round-4): mathematical properties the
+# SOLVER must preserve, not bugs it had. These anchor the two-regime semantics.
+# ---------------------------------------------------------------------------
+
+def test_invariant_sparse_decode_eq_chosen_stat_error():
+    """Test A — sparse (cap=1) exactness: whichever single stat a query selects,
+    the decoded q-error must be exactly that stat's q-error (e_hat = e_s), and
+    mean == decode (objective == reported metric), not a post-clamped value.
+
+    base=100, e1=10, e2=20 (both overlap on nothing -> both are separate options;
+    cap=1 picks the better, decoding arithmetic exactly)."""
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=1, cost=10),
+        PhysicalStat(table="t", columns=("c", "d"), level=1, cost=10),
+    ]
+    base = 100.0
+    opts = [
+        Option(stat_index=0, qerror=10.0, level=1, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=20.0, level=1, query="q1", cand="t(c,d)"),
+    ]
+    res = solve_ilp(phys, [opts], [base], budget_bytes=1000,
+                    optimizer_class=OptimizerClass.SPARSE_LINEAR, per_query_cap=1)
+    # solver picks opt0 (e=10, Δ=90 > opt1's Δ=80) and decodes exactly to 10.
+    assert res.chosen == [["t|a,b|L1"]]
+    assert res.qerror_per_query == pytest.approx([10.0], abs=1e-9)
+    assert res.mean_qerror == pytest.approx(10.0, abs=1e-9)
+
+
+def test_invariant_multiplicative_decode_matches_analytic_product():
+    """Test B — multiplicative (cap>1) exact-surrogate decode. With b=100 and two
+    non-overlapping stats e1=20, e2=50, selecting both must decode to the analytic
+    product 100*(20/100)*(50/100)=10, and that metric equals the solver objective
+    (still >= 1, so no floor distortion)."""
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=1, cost=10),
+        PhysicalStat(table="t", columns=("c", "d"), level=1, cost=10),
+    ]
+    base = 100.0
+    opts = [
+        Option(stat_index=0, qerror=20.0, level=1, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=50.0, level=1, query="q1", cand="t(c,d)"),
+    ]
+    # budget lets both fit; floor 100*(.2*.5)=10 >= 1 so both are jointly feasible.
+    res = solve_ilp(phys, [opts], [base], budget_bytes=1000,  # MULTIPLICATIVE
+                    per_query_cap=2)
+    assert len(res.chosen[0]) == 2
+    analytic = 100.0 * (20.0 / 100.0) * (50.0 / 100.0)
+    assert res.qerror_per_query[0] == pytest.approx(analytic, abs=1e-9)
+    assert res.qerror_per_query[0] >= 1.0  # floor not hit for a legit >= 1 product
+
+
+def test_invariant_maint_highest_level_binds_not_sum():
+    """Test C — maintenance Y-two-layer shared-table semantics: two stats on ONE
+    table, one at L1 and one at L2, pay the L2 fixed charge ONCE (B_t(2)+sum var),
+    never B_t(1)+B_t(2). Ladder (1,10,100): L2 fixed = 100.
+
+    Also covers: raising one stat L1->L2 charges 100, not 10+100."""
+    prof = MaintProfile(table_base_tiers={"t": (1.0, 10.0, 100.0)})  # monotone
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=1, cost=50,
+                     maint_cost=1.0),   # var 1.0
+        PhysicalStat(table="t", columns=("c", "d"), level=2, cost=50,
+                     maint_cost=1.0),   # var 1.0
+    ]
+    base = 10.0
+    opts = [
+        Option(stat_index=0, qerror=5.0, level=1, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=5.0, level=2, query="q1", cand="t(c,d)"),
+    ]
+    res = solve_ilp(phys, [opts], [base], budget_bytes=200,
+                    maint_budget=300.0, maint_profile=prof)
+    assert len(res.selected_stats) == 2
+    # fixed at highest reached level (L2 = 100) ONCE + var(1+1) => 102
+    assert res.total_maint == pytest.approx(102.0, abs=1e-6)
+    # not 10 (L1) + 100 (L2) + vars, i.e. never 112-ish.
+    assert res.total_maint < 110.0
+
