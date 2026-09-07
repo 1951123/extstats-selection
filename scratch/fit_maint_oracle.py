@@ -16,7 +16,7 @@ from pathlib import Path
 
 from extstats2.config import DBConfig, get_backend
 from extstats2.core.maint_fit_oracle import fit_oracle_bench
-from extstats2.core.measure_lambda_io import result_dir, read_meta
+from extstats2.core.measure_io import result_dir, read_meta
 
 _ORACLE = dict(host="localhost", port=1521, user="SYSTEM",
                password="lxf82073077", service="FREEPDB1")

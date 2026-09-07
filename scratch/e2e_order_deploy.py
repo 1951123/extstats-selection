@@ -24,14 +24,14 @@ def numeric_qid_sort(qid):
 
 
 def main(level: str, budget: int, db: str, table: str, deploy: bool, out: Path):
-    from extstats2.core.optimize_lambda import load_lambda_problem, build_inner_at_level
+    from extstats2.core.optimize_sgrid import load_sgrid_problem, build_inner_at_level
     from extstats2.core.optimize import solve_ilp, OptimizerClass
     from extstats2.core.optimize_pg_order import ChosenStat, solve_pg_order
     from extstats2.bench import load_benchmark
-    from extstats2.core.measure_lambda_io import read_query_measure
+    from extstats2.core.measure_io import read_query_measure
 
     corpus = ROOT / "results" / "measure" / "census" / "postgres"
-    meta, blocks = load_lambda_problem(ROOT / "results" / "measure", "census", "postgres")
+    meta, blocks = load_sgrid_problem(ROOT / "results" / "measure", "census", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, level, skip_worse_than_baseline=True)
     qb = [float(v) for v in qbases]
     res = solve_ilp(phys, opts, qb, budget,
@@ -40,7 +40,7 @@ def main(level: str, budget: int, db: str, table: str, deploy: bool, out: Path):
     chosen_stats = res.selected_stats          # list[PhysicalStat]
     cols2id = {}                               # (table,columns)-> phys index used in build_inner
     n_stats = len(phys)
-    # predicted qerror per query by qid (build_inner order uses blocks keys, numeric? load_lambda_problem sorts p.stem string)
+    # predicted qerror per query by qid (build_inner order uses blocks keys, numeric? load_sgrid_problem sorts p.stem string)
     # NOTE: blocks keys are lexicographically sorted file stems (query.1, query.10,...). We map by qid.
     qids_order = list(blocks.keys())
     predicted_by_qid = {qid: float(qv) for qid, qv in zip(qids_order, res.qerror_per_query)}

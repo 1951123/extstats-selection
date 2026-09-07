@@ -72,10 +72,13 @@ python -m extstats2.cli check --backend postgres   # config/backend/sampling san
 The PostgreSQL backend requires a running PG 16 instance and a loaded benchmark
 (`benchmarks/init_*.sh`), mirroring v1's conventions.
 
-> **Note (canonical path).** The S-grid / λ-first research pipeline is driven from
-> `scratch/` — e.g. `measure_sgrid.py` (per-λ corpus into `results/measure/…`),
-> `fit_maint_postgres.py` / `fit_maint_oracle.py` (`_maint.json`), and
-> `measure_milp_curve.py` (budget×quality curves) — and the canonical library
-> entry points are re-exported from `extstats2.core`
-> (`measure_lambda*`, `optimize_lambda.inner_optimal_at_level`, `solve_ilp`).
-> `core.measure` / `eval/cross_*` are the LEGACY v1 / capacity-era path (see docs).
+> **Note (canonical path).** The S-grid / sample-first research pipeline is driven
+> from `scratch/` — e.g. `measure_sgrid.py` (per-sampling-level corpus into
+> `results/measure/…`), `fit_maint_postgres.py` / `fit_maint_oracle.py`
+> (`_maint.json`), and `measure_milp_curve.py` (budget×quality curves) — and the
+> canonical library entry points are re-exported from `extstats2.core`
+> (`measure_query_sampling*`, `measure_workload_sampling`, `optimize_sgrid`
+> / `load_sgrid_problem`, `solve_ilp`). The model keys measurement by the REQUESTED
+> sampling level `S`; the realized sample is `min(S, N_t)` and `λ = min(S, N_t)/N_t`
+> is a derived reporting metric, not a search axis. Legacy v1 / capacity-era code
+> (`core.measure`, `eval/cross_*`, `plan/`) has been removed.

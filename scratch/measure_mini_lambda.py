@@ -4,7 +4,7 @@ from pathlib import Path
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 from extstats2.core.candidates import generate_candidates_per_query
-from extstats2.core.measure_lambda import measure_workload_lambda
+from extstats2.core.measure_sampling import measure_workload_sampling
 
 be = get_backend("postgres", cfg=DBConfig(host="localhost", port=5432,
               user="postgres", password="postgres", dbname="census"))
@@ -20,7 +20,7 @@ for q in qs:
     cands[q.qid] = c[:3]  # cap for speed
     print(q.qid, "truth=", q.ground_truth, "arity2 cands (keep 3):", len(c))
 
-measure_workload_lambda(be, qs, cands, levels=(0, 1, 2),
+measure_workload_sampling(be, qs, cands, levels=(0, 1, 2),
                         workload="census_mini", outdir=Path("results"))
 
 for s in list(be.list_stats(".climate")):

@@ -43,9 +43,9 @@ def metrics(qerrs):
 
 
 def build_and_solve(level: str, budget: int, disjoint: bool = False):
-    from extstats2.core.optimize_lambda import load_lambda_problem, build_inner_at_level
+    from extstats2.core.optimize_sgrid import load_sgrid_problem, build_inner_at_level
     from extstats2.core.optimize import solve_ilp, OptimizerClass
-    meta, blocks = load_lambda_problem(CORPUS, "census", "postgres")
+    meta, blocks = load_sgrid_problem(CORPUS, "census", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, level, skip_worse_than_baseline=True)
     qb = [float(v) for v in qbases]
     res = solve_ilp(phys, opts, qb, budget,
@@ -71,7 +71,7 @@ def go(level: str, budget: int, db: str, table: str, limit: int, disjoint: bool,
     be = get_backend("postgres", cfg=DBConfig(
         host="localhost", port=5432, user="postgres", password="postgres", dbname=db))
     cap_obj = [c for c in be.supported_capabilities() if c.name == "mcv"][0]
-    be.enter_lambda_state(table, int(level))
+    be.enter_sampling_state(table, int(level))
 
     for s in list(be.list_stats(table)):
         be.drop_stat(s)

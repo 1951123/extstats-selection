@@ -101,7 +101,7 @@ def main() -> None:
         BP = tuple(spec["B"]) if spec["B"] else None
         for lvl in levels:
             # natural no-ext per-λ baseline
-            be.enter_lambda_state(".climate", lvl)
+            be.enter_sampling_state(".climate", lvl)
             for s in list(be.list_stats(".climate")):
                 be.drop_stat(s)
             be_base = be.estimate(q)
@@ -125,7 +125,7 @@ def main() -> None:
 
             row = {
                 "level": lvl,
-                "S_rows": be.lambda_sampling_rows(".climate", lvl),
+                "S_rows": be.sample_rows_at_level(".climate", lvl),
                 "base": {"estimate": be_base.estimate, "qerror": base_qerr},
                 "keep_A": {"cols": AP, "estimate": oA.estimate,
                            "qerror": oA.qerror},

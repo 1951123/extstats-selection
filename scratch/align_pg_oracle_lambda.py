@@ -16,8 +16,8 @@ from pathlib import Path
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 from extstats2.core.candidates import generate_candidates_per_query
-from extstats2.core.measure_lambda import measure_workload_lambda
-from extstats2.core.measure_lambda_io import result_dir
+from extstats2.core.measure_sampling import measure_workload_sampling
+from extstats2.core.measure_io import result_dir
 
 # ---- remeasure on Oracle ----
 be = get_backend("oracle", cfg=DBConfig(host="localhost", port=1521,
@@ -34,7 +34,7 @@ for q in qs:
     cands[q.qid] = c[:3]
     print("[oracle]", q.qid, "truth=", q.ground_truth, "keep3:", len(cands[q.qid]))
 
-measure_workload_lambda(be, qs, cands, levels=(0, 1, 2),
+measure_workload_sampling(be, qs, cands, levels=(0, 1, 2),
                         workload="census_mini", outdir=Path("results"))
 
 for s in list(be.list_stats(".climate")):
@@ -43,7 +43,7 @@ print("ORACLE MEASURE DONE")
 
 # ---- compare ----
 import json
-from extstats2.core.measure_lambda_io import read_meta
+from extstats2.core.measure_io import read_meta
 
 pg = result_dir(Path("results"), "census_mini", "postgres")
 or_ = result_dir(Path("results"), "census_mini", "oracle")

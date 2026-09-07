@@ -90,7 +90,7 @@ _CAPABILITIES = [
 
 
 # Abstract level index -> {"s_rows": S-target, "buckets": n}. 2026-09-05 S-grid:
-# lambda tiers are defined by SAMPLE ROWS S (dataset-bound), not by a DBMS %
+# sampling LEVELS are defined by SAMPLE ROWS S (dataset-bound), not by a DBMS-%
 # knob. Global S_rows grid = [30000, 300000]; Oracle realizes S via
 #   estimate_percent = 100 * min(S, N) / N
 # (per table N), which mirrors PostgreSQL's S = min(300*target, N) so the two
@@ -194,7 +194,8 @@ class OracleBackend(Backend):
         return self._percent_for(None, capacity.level), self._buckets(capacity.level)
 
     def _s_rows_target(self, level: int) -> float:
-        """The S_rows (sample-rows) target of λ-tier ``level`` from the S-grid."""
+        """The S_rows (sample-rows) target of sampling level ``level`` from the
+        S-grid."""
         if level not in self._ladder:
             raise KeyError(f"capacity level {level!r} not in ladder "
                            f"{list(self._ladder)}")
@@ -337,17 +338,18 @@ class OracleBackend(Backend):
                 "estimate_percent=>:ep, degree=>:d); END;",
                 {"ep": estimate_percent, "d": degree})
 
-    # -- λ-first (sampling-first, §7bis) realization ----------------------
+    # -- sample-first (S-grid) realization --------------------------------
 
-    def lambda_sampling_rows(self, table: str, level: int) -> Optional[float]:
-        """S at λ-tier ``level`` = ``estimate_percent/100 · N`` (Oracle's scan knob
-        already directly sets the sample; no single-column target involved)."""
+    def sample_rows_at_level(self, table: str, level: int) -> Optional[float]:
+        """S at sampling level ``level`` = realized scan rows ``min(S, N_t)``.
+        Oracle's knob (``estimate_percent``) directly sets the sample; no
+        single-column target involved."""
         return self.sample_rows_per_level(table, level)
 
-    def lambda_sampling_percent(self, table: str, level: int) -> Optional[float]:
-        """Oracle's native ``estimate_percent`` that realizes λ-tier ``level`` on
-        ``table`` under the S-grid = ``100*min(S,N)/N`` (per-table, not a fixed
-        %; mirrors PG's S realization)."""
+    def sample_percent_at_level(self, table: str, level: int) -> Optional[float]:
+        """Oracle's native ``estimate_percent`` that realizes sampling level
+        ``level`` on ``table`` under the S-grid = ``100*min(S,N)/N`` (per-table,
+        not a fixed %; mirrors PG's S realization)."""
         return float(self._percent_for(table, level))
 
     # Oracle's representation grid: a SINGLE engine-faithful operating point,
@@ -371,35 +373,38 @@ class OracleBackend(Backend):
         return tuple(self._PARAM_TIERS)
 
     def single_col_target_for_level(self, table: str, level: int) -> Optional[int]:
-        """Oracle realizes λ via ``estimate_percent`` (scan knob), NOT a single-column
-        target — there is no per-column statistics_target knob on Oracle."""
+        """Oracle realizes sampling via ``estimate_percent`` (scan knob), NOT a
+        single-column target — there is no per-column statistics_target knob on
+        Oracle."""
         return None
 
     def max_param_at_level(self, table: str, level: int) -> Optional[float]:
-        """No engine-imposed lattice cap on the representation param at a λ-tier.
+        """No engine-imposed lattice cap on the representation param at a level.
 
         On PG, ``SIZE/param <= S/300`` is a genuine identity because the *same*
         knob (``statistics_target``) is both the MCV-list cap and the driver of
         sampling (``S = target*300``), so a statistic cannot represent more than
         its own target. Oracle has no such coupling: ``SIZE`` (histogram buckets)
-        and ``estimate_percent`` (the λ sampling depth) are two *independent*
-        arguments of the same ``GATHER_TABLE_STATS`` call, so a column group can
-        legally carry ``SIZE 254`` even when the λ scan samples 1% of the table.
+        and ``estimate_percent`` (the sampling depth at this level) are two
+        *independent* arguments of the same ``GATHER_TABLE_STATS`` call, so a
+        column group can legally carry ``SIZE 254`` even when the sample is 1% of
+        the table.
 
         Returning ``None`` (the base-class contract for "cap not engine-imposed")
         means the only bound on the offered representation params is
-        :meth:`representation_param_tiers` itself; the generic per-λ driver no
+        :meth:`representation_param_tiers` itself; the generic per-level driver no
         longer prunes ``SIZE=254`` at L0 as it would under the inherited PG
-        ``S/300`` rule. (λ still affects *fidelity* of a sparse histogram, but
-        that is a quality axis addressed separately, not a hard level->param cap.)
+        ``S/300`` rule. (Sampling depth still affects *fidelity* of a sparse
+        histogram, but that is a quality axis addressed separately, not a hard
+        level->param cap.)
         """
         return None
 
-    def enter_lambda_state(self, table: str, level: int) -> None:
-        """Realize λ-tier ``level``: one single-column-only GATHER at that λ's
-        realized estimate_percent for ``table`` (SIZE AUTO — natural single-col
-        histograms), no column group. After this, ``estimate`` = the no-ext
-        per-λ baseline ``e^0(S)``."""
+    def enter_sampling_state(self, table: str, level: int) -> None:
+        """Realize sampling level ``level``: one single-column-only GATHER at
+        that level's realized estimate_percent for ``table`` (SIZE AUTO — natural
+        single-col histograms), no column group. After this, ``estimate`` = the
+        no-ext per-level baseline ``e^0(S)``."""
         ep = self._percent_for(table, level)
         self.restore_natural_stats(table, estimate_percent=ep)
 

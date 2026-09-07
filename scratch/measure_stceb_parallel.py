@@ -15,8 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda import DEFAULT_LAMBDA_LEVELS
-from extstats2.core.measure_lambda_io import LambdaTier, Meta, result_dir, write_meta
+from extstats2.core.measure_sampling import DEFAULT_SAMPLING_LEVELS
+from extstats2.core.measure_io import SampleTier, Meta, result_dir, write_meta
 from extstats2.core.candidates import CandidateSet
 
 
@@ -24,7 +24,7 @@ def _worker(args: dict) -> int:
     import multiprocessing as _
     from extstats2.bench import load_benchmark
     from extstats2.core.candidates import generate_candidates_per_query
-    from extstats2.core.measure_lambda import measure_query_lambda_m
+    from extstats2.core.measure_sampling import measure_query_sampling_m
     mirror = args["mirror_db"]
     bench = args["bench"]
     qids = args["qids"]
@@ -46,7 +46,7 @@ def _worker(args: dict) -> int:
         norm = [CandidateSet(table=("." + cd.table.lstrip(".").lower()),
                              columns=cd.columns) for cd in cands]
         try:
-            measure_query_lambda_m(be, q, norm, levels=tuple(args["levels"]),
+            measure_query_sampling_m(be, q, norm, levels=tuple(args["levels"]),
                                    param_tiers=None, outdir=outdir)
         except Exception as e:  # keep going on per-query errors; note it
             print(f"[{mirror}] ERR {qid}: {e}", flush=True)
@@ -91,9 +91,9 @@ def main():
     tiers = []
     probe_tab = ".posts"
     for lv in a.levels:
-        tiers.append(LambdaTier(
+        tiers.append(SampleTier(
             level=lv,
-            S_rows=be0.lambda_sampling_rows(probe_tab, lv),
+            S_rows=be0.sample_rows_at_level(probe_tab, lv),
             single_target=be0.single_col_target_for_level(probe_tab, lv),
             estimate_percent=None))
     write_meta(outdir, Meta(bench=a.bench, backend="postgres", tiers=tiers,

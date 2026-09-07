@@ -63,8 +63,8 @@ _SELECT_COUNT_RE = re.compile(r"(?is)^\s*SELECT\s+COUNT\(\*\)\s+")
 
 # Default capacity ladder: abstract level index -> statistics_target.
 #
-# 2026-09-05 S-grid policy: lambda tiers are defined by SAMPLE ROWS S, not by a
-# DBMS-native knob. The global S_rows grid is [30000, 300000]; PG realizes S via
+# 2026-09-05 S-grid policy: sampling LEVELS are defined by SAMPLE ROWS S, not
+# by a DBMS-native knob. The global S_rows grid is [30000, 300000]; PG realizes S via
 # statistics_target = S/300, so the ladder is target {100, 1000} <-> S {30000,
 # 300000}. Sampling saturates at the table row count N (min(300*target, N)), which
 # makes the realized per-table points follow the S-grid cases automatically:
@@ -374,8 +374,8 @@ class PostgresBackend(Backend):
         """Build one statistic ``obj`` at an explicit ``param`` in the current
         (λ) state: ``ALTER STATISTICS ... SET STATISTICS <param>`` + one ANALYZE.
 
-        In the λ-first model the table's single columns are already at the λ-state
-        target ``S/300`` (set by :meth:`enter_lambda_state`), which already forces
+        In the sample-first model the table's single columns are already at the
+        sampling-state target ``S/300`` (set by :meth:`enter_sampling_state`), which already forces
         the depth; setting the object's own target to ``param`` (≤ ``S/300``) just
         controls its retained representation without changing the shared scan.
         """
@@ -388,9 +388,9 @@ class PostgresBackend(Backend):
 
     def build_stat_params_batch(self, objs_params: list[tuple[StatObject, int]]) -> None:
         """Protocol-M build: set each object's OWN target, then ONE ANALYZE per
-        table builds them all from the established (λ-state) shared scan.
+        table builds them all from the established (sampling-state) shared scan.
 
-        The single columns are already at ``S/300`` (via :meth:`enter_lambda_state`),
+        The single columns are already at ``S/300`` (via :meth:`enter_sampling_state`),
         so ``targrows`` is already the deep ``S``; each object's own
         ``SET STATISTICS p`` (``p ≤ S/300``) only sets its retained representation
         without re-scanning for each one. This is the batch step that de-amortizes
@@ -556,7 +556,8 @@ class PostgresBackend(Backend):
         """Set every regular column's ``attstattarget`` to ``tgt`` and match the
         session default; optionally ANALYZE once to realize the depth.
 
-        This is the PG realization of a λ-state: with all single columns at ``tgt``
+        This is the PG realization of a sampling state: with all single columns
+        at ``tgt``
         (== ``S/300``) they are the max, so ``targrows >= 300*tgt = S``.
         """
         tgt = int(tgt)
@@ -658,10 +659,10 @@ class PostgresBackend(Backend):
         n = self._reltuples(table)
         return None if n <= 0 else float(n)
 
-    # -- λ-first (sampling-first, §7bis) realization ----------------------
+    # -- sample-first (S-grid) realization --------------------------------
 
     def _target_for_level(self, table: str, level: int) -> Optional[int]:
-        """PG native statistics_target for λ-tier ``level`` (== S_level/300)."""
+        """PG native statistics_target for sampling level ``level`` (== S_level/300)."""
         if level not in self._ladder:
             return None
         n = self._reltuples(table)
@@ -671,9 +672,9 @@ class PostgresBackend(Backend):
         t_raw = int(self._ladder[level])
         return int(min(t_raw, n / 300.0))
 
-    def lambda_sampling_rows(self, table: str, level: int) -> Optional[float]:
-        """S_level = rows ANALYZEd at λ-tier ``level`` with all single columns at
-        the λ target (no 100 floor; λ-first) — ``= min(300*target, N)``."""
+    def sample_rows_at_level(self, table: str, level: int) -> Optional[float]:
+        """S_level = rows ANALYZEd at sampling level ``level`` with all single
+        columns at the S target (no 100 floor; sample-first) — ``= min(300*target, N)``."""
         if level not in self._ladder:
             return None
         n = self._reltuples(table)
@@ -709,14 +710,14 @@ class PostgresBackend(Backend):
 
     def single_col_target_for_level(self, table: str, level: int) -> Optional[int]:
         """The exact integer to set every single column's ``attstattarget`` to in
-        order to realize λ-tier ``level`` (== max_param_at_level)."""
+        order to realize sampling level ``level`` (== max_param_at_level)."""
         return self._target_for_level(table, level)
 
-    def enter_lambda_state(self, table: str, level: int) -> None:
-        """Realize λ-tier ``level``: set ALL single columns to
+    def enter_sampling_state(self, table: str, level: int) -> None:
+        """Realize sampling level ``level``: set ALL single columns to
         ``attstattarget = S/300`` and ANALYZE once (no extended stat present).
 
-        After this, ``estimate`` = no-ext per-λ baseline ``e^0(S_level)``; an
+        After this, ``estimate`` = no-ext per-level baseline ``e^0(S_level)``; an
         extended object later built at ``param ≤ S_level/300`` shares this depth.
         """
         tgt = self._target_for_level(table, level)

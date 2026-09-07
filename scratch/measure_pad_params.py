@@ -46,7 +46,7 @@ from pathlib import Path
 from extstats2.backend.base import StatObject
 from extstats2.backend.capabilities import Capacity
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda_io import read_meta, write_meta
+from extstats2.core.measure_io import read_meta, write_meta
 
 
 def existing_cells(file_block: dict):
@@ -114,7 +114,7 @@ def main() -> None:
             if not want:
                 continue
             # enter lambda state once for this query+lambda; baseline is kept
-            be.enter_lambda_state(table, int(lv))
+            be.enter_sampling_state(table, int(lv))
             for s in list(be.list_stats(table)):
                 be.drop_stat(s)
 
@@ -134,7 +134,7 @@ def main() -> None:
                     driver = be.catalog_driver()
                     all_objs = [o for _, o, _ in objs]
                     bkp = driver.backup_payloads(all_objs)
-                    rows = be.lambda_sampling_rows(table, int(lv))
+                    rows = be.sample_rows_at_level(table, int(lv))
                     n = be.num_rows(table) or 1.0
                     for cols, o, pp in objs:
                         bkp.mask_all_but({o})

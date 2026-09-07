@@ -40,7 +40,7 @@ from dataclasses import replace
 from itertools import combinations
 from pathlib import Path
 import numpy as np
-from extstats2.core.optimize_lambda import load_lambda_problem, build_inner_at_level
+from extstats2.core.optimize_sgrid import load_sgrid_problem, build_inner_at_level
 from extstats2.core.optimize import solve_ilp, OptimizerClass
 from extstats2.core.maint_model import read_maint
 from extstats2.bench import load_benchmark
@@ -256,7 +256,7 @@ def main():
             "maint+oracle not wired yet: the maint cost legs here are PG-modeled "
             "(PG ANALYZE fixed/var). Oracle maint must consume "
             "oracle.table_maintain_tiers/stat_maintain_var; run storage first.")
-    blocks = load_lambda_problem(ROOT / "results" / "measure", bench,
+    blocks = load_sgrid_problem(ROOT / "results" / "measure", bench,
                                  backend)[1]
     # measured maintenance params are REQUIRED for a maint constraint; _load_maint
     # raises if _maint.json is absent (no closed-form fallback).

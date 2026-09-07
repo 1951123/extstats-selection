@@ -17,7 +17,7 @@ sys.path.insert(0, "src")
 
 import oracledb
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda import measure_query_lambda
+from extstats2.core.measure_sampling import measure_query_sampling
 from extstats2.core.candidates import generate_candidates_per_query
 
 SYSTEM = dict(user="SYSTEM", password="lxf82073077",
@@ -60,7 +60,7 @@ def worker_backend_measure() -> None:
     q = Q["query.61"]
     cands = generate_candidates_per_query([q], arities=(2,))["query.61"]
     t = time.time()
-    measure_query_lambda(be, q, cands, levels=(0,), param_tiers=None,
+    measure_query_sampling(be, q, cands, levels=(0,), param_tiers=None,
                          outdir=Path("/tmp/protow"))
     print(f"[proto] measured query.61 on {WORKER}.CLIMATE in "
           f"{time.time()-t:.1f}s (n_cands={len(cands)})", flush=True)

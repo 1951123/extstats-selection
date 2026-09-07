@@ -31,9 +31,9 @@ import sys
 from pathlib import Path
 
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda import (DEFAULT_LAMBDA_LEVELS,
-                                           measure_query_lambda_m)
-from extstats2.core.measure_lambda_io import (LambdaTier, Meta, write_meta,
+from extstats2.core.measure_sampling import (DEFAULT_SAMPLING_LEVELS,
+                                           measure_query_sampling_m)
+from extstats2.core.measure_io import (SampleTier, Meta, write_meta,
                                               result_dir)
 
 
@@ -84,7 +84,7 @@ def _worker(args_serial: dict) -> int:
                 pass
         # measure (Protocol-M path since catalog-mask True) -> writes <qid>.json
         try:
-            measure_query_lambda_m(be, q, cands, levels=levels, param_tiers=None,
+            measure_query_sampling_m(be, q, cands, levels=levels, param_tiers=None,
                                    outdir=dest)
         except Exception as e:
             print(f"[{mirror_db}] ERR {qid}: {e}", flush=True)
@@ -105,7 +105,7 @@ def main() -> None:
     ap.add_argument("--dbprefix", default="census_m")
     ap.add_argument("--table", default=".climate")
     ap.add_argument("--arities", type=int, nargs="+", default=[2])
-    ap.add_argument("--levels", type=int, nargs="+", default=list(DEFAULT_LAMBDA_LEVELS))
+    ap.add_argument("--levels", type=int, nargs="+", default=list(DEFAULT_SAMPLING_LEVELS))
     ap.add_argument("--bench", default="census")
     ap.add_argument("--processes", type=int, default=None)
     args = ap.parse_args()
@@ -133,10 +133,10 @@ def main() -> None:
     # tiers declare only the lambda LEVELS that exist; the authoritative per-table
     # realized S grid lives in extra.table_s_rows (PG: S_rows/single_target;
     # estimate_percent is an Oracle-only notion -> null on PG).
-    tiers = [LambdaTier(level=lv, S_rows=None, single_target=None,
+    tiers = [SampleTier(level=lv, S_rows=None, single_target=None,
                         estimate_percent=None) for lv in args.levels]
     table_s_rows = {table_src: {str(lv): {
-        "S_rows": be0.lambda_sampling_rows(table_src, lv),
+        "S_rows": be0.sample_rows_at_level(table_src, lv),
         "single_target": be0.single_col_target_for_level(table_src, lv),
         "estimate_percent": None} for lv in args.levels}}
     write_meta(outdir, Meta(bench=args.bench, backend="postgres", tiers=tiers,

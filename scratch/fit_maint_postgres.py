@@ -14,7 +14,7 @@ from pathlib import Path
 
 from extstats2.config import DBConfig, get_backend
 from extstats2.core.maint_fit import fit_pg_bench
-from extstats2.core.measure_lambda_io import result_dir, read_meta
+from extstats2.core.measure_io import result_dir, read_meta
 
 # (bench -> pg database holding its table(s))
 _BENCH_DB = {"census": "census", "dmv": "dmv", "stats_ceb_single": "stats"}

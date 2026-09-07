@@ -1,7 +1,7 @@
 """Fresh per-lambda re-measurement under current conventions.
 
 Run-level conventions baked in by the driver defaults (no explicit levels passed
-=> DEFAULT_LAMBDA_LEVELS=(0,1), so L2/full-scan is dropped; param_tiers=None =>
+=> DEFAULT_SAMPLING_LEVELS=(0,1), so L2/full-scan is dropped; param_tiers=None =>
 each backend's own representation_param_tiers grid).
 
 Candidates per query are drawn from the query's ACTUAL predicates (predicate-
@@ -17,7 +17,7 @@ from pathlib import Path
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 from extstats2.core.candidates import generate_candidates_per_query
-from extstats2.core.measure_lambda import measure_workload_lambda
+from extstats2.core.measure_sampling import measure_workload_sampling
 
 backend_name = sys.argv[1] if len(sys.argv) > 1 else "postgres"
 if backend_name == "postgres":
@@ -62,7 +62,7 @@ for q in qs:
 
 print(f"[{backend_name}] measuring {len(qs)} queries, levels=(0,1) default, "
       f"per-backend param grid")
-measure_workload_lambda(be, qs, cands, workload="census_mini",
+measure_workload_sampling(be, qs, cands, workload="census_mini",
                         outdir=Path("results"))
 
 for s in list(be.list_stats(".climate")):

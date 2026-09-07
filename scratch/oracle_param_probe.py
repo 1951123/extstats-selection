@@ -56,7 +56,7 @@ def hidden_buckets(cols):
 print(f"query {q.qid} truth={q.ground_truth} pair={cols}")
 print(f"{'SIZE p':>7} {'realized_buckets':>17} {'estimate':>10} {'qerr':>8}")
 # fixed deep lambda state (L2)
-be.enter_lambda_state(".climate", 2)
+be.enter_sampling_state(".climate", 2)
 for p in params:
     obj = StatObject(table=".climate", columns=list(cols), capability=mcv,
                      capacity=Capacity(2), name=f"probe_l2_{p}")

@@ -59,7 +59,7 @@ def main() -> None:
     a = ap.parse_args()
     level = str(a.level)
 
-    from extstats2.core.optimize_lambda import (load_lambda_problem,
+    from extstats2.core.optimize_sgrid import (load_sgrid_problem,
                                                 build_inner_at_level)
     from extstats2.core.optimize import solve_ilp, OptimizerClass
     from extstats2.config import DBConfig, get_backend
@@ -67,7 +67,7 @@ def main() -> None:
     from extstats2.backend.capabilities import Capacity
 
     # ---- 1) build + solve over the existing Oracle-measured corpus ----------
-    meta, blocks = load_lambda_problem(CORPUS, WORKLOAD, BACKEND)
+    meta, blocks = load_sgrid_problem(CORPUS, WORKLOAD, BACKEND)
     print(f"[oracle-e2e] corpus={WORKLOAD}/{BACKEND} queries={len(blocks)} "
           f"levels_in_meta={[t.level for t in (meta.tiers if meta else [])]}")
     phys, opts, qbases = build_inner_at_level(blocks, level,
@@ -101,7 +101,7 @@ def main() -> None:
         be.drop_stat(s)
     # enter λ-state at the chosen level (sampling depth) so deploy matches how
     # the corpus was measured at this λ.
-    ep = be.lambda_sampling_percent(table, a.level)
+    ep = be.sample_percent_at_level(table, a.level)
     be.restore_natural_stats(table, estimate_percent=float(ep))
     for s in list(be.list_stats(table)):
         be.drop_stat(s)
@@ -119,7 +119,7 @@ def main() -> None:
         grp = "(" + ",".join('"%s"' % c.upper() for c in cols) + ")"
         parts.append(f"FOR COLUMNS {grp} SIZE {int(p)}")
     method_opt = " ".join(parts)
-    ep = be.lambda_sampling_percent(table, a.level)
+    ep = be.sample_percent_at_level(table, a.level)
     cur = be.conn.cursor()
     cur.execute(
         "BEGIN DBMS_STATS.GATHER_TABLE_STATS("

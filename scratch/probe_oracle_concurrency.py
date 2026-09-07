@@ -22,7 +22,7 @@ sys.path.insert(0, "src")
 
 import oracledb
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda import measure_query_lambda
+from extstats2.core.measure_sampling import measure_query_sampling
 from extstats2.core.candidates import generate_candidates_per_query
 
 WORKERS = {"CENSL0W1": "workerpw1", "CENSL0W2": "workerpw2"}
@@ -69,7 +69,7 @@ def worker(user: str, pw: str, qid: str, out: str) -> float:
     odir = Path(out) / user
     odir.mkdir(parents=True, exist_ok=True)
     t = time.time()
-    measure_query_lambda(be, q, cands, levels=(0,), param_tiers=None,
+    measure_query_sampling(be, q, cands, levels=(0,), param_tiers=None,
                          outdir=odir)
     dt = time.time() - t
     print(f"[probe][{user}] measured {qid} (n_cands={len(cands)}) in "

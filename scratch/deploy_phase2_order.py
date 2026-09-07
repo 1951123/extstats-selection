@@ -44,7 +44,7 @@ def main(ord_json, db, table, level, out):
     print(f"order len {len(order)}  realised_model={rmodel if rmodel is not None else float('nan'):.4f} pred={pred if pred is not None else float('nan'):.4f}")
     be=get_backend("postgres", cfg=DBConfig(host="localhost",port=5432,user="postgres",password="postgres",dbname=db))
     cap=[c for c in be.supported_capabilities() if c.name=="mcv"][0]
-    be.enter_lambda_state(table, int(level))
+    be.enter_sampling_state(table, int(level))
     for s in list(be.list_stats(table)):
         be.drop_stat(s)
     # create stats in the given ORDER (OID ascending = first is lowest OID)

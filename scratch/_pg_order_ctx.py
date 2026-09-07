@@ -17,13 +17,13 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 def load_ctx(level="1", budget=100000):
-    from extstats2.core.optimize_lambda import load_lambda_problem, build_inner_at_level
+    from extstats2.core.optimize_sgrid import load_sgrid_problem, build_inner_at_level
     from extstats2.core.optimize import solve_ilp, OptimizerClass
     from extstats2.core.optimize_pg_order import ChosenStat
     from extstats2.bench import load_benchmark
-    from extstats2.core.measure_lambda_io import read_query_measure
+    from extstats2.core.measure_io import read_query_measure
 
-    meta, blocks = load_lambda_problem(ROOT / "results" / "measure", "census", "postgres")
+    meta, blocks = load_sgrid_problem(ROOT / "results" / "measure", "census", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, level, skip_worse_than_baseline=True)
     res = solve_ilp(phys, list(opts), [float(v) for v in qbases], budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,

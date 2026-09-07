@@ -1,15 +1,20 @@
-"""Per-λ (sampling-first) phase-1 result storage.
+"""Per-sampling-level (measure_io) result storage.
 
-Stores the premeasure output of the converged model (§7bis): each *query* produces
-a ``by_lambda`` dict whose outer key is a sample-tier level index. Every λ slot
-holds BOTH the per-λ no-ext baseline ``e^0(S_λ)`` (single columns at ``S_λ/300``,
-no extended stat) AND the candidate readings ``(colset, param) → q-error`` measured
-in that same λ-state — so the optimizer reading this file gets the same-``S``
-fair pairing ``Δ_{λ,(C,p)} = baseline.qerror − cand.qerror``.
+Stores the premeasure output of the converged model (§7bis): each *query*
+produces a ``by_lambda`` dict keyed by sampling-level index. Every level slot
+holds BOTH the per-level no-ext baseline ``e^0(S_level)`` (single columns at
+``S_level/300``, no extended stat) AND the candidate readings
+``(colset, param) → q-error`` measured in that same level's sampling state — so
+the optimizer reading this file gets the same-``S`` fair pairing
+``Δ_{S,(C,p)} = baseline.qerror − cand.qerror``.
+
+(``by_lambda`` is historical storage wording; ``lambda = min(S,N_t)/N_t`` is the
+derived sampling fraction for table ``t`` at level whose requested rows are
+``S`` — the searched axis is the sampling level ``S``, not ``lambda``.)
 
 Storage is **one JSON file per query** (decoupled production, incremental
 re-runs, parallel-safe), plus a single root ``_meta.json`` carrying the shared
-lambda-tier definitions (backend-agnostic level → S_rows/single_target).
+sampling-tier definitions (backend-agnostic level → S_rows/single_target).
 
 Output layout under a results root ``outdir`` (the corpus dir is
 ``CORPUS_SUBDIR`` = "measure"; see constant note)::
@@ -33,7 +38,7 @@ from typing import Any, Optional
 # Renamed from "per_lambda" to "measure" on 2026-09-06 (corpus dir moved with a
 # single `mv results/per_lambda results/measure` after pausing the in-flight
 # dmv/oracle measure; that measure was restarted and now writes here). Every
-# coroutine reader must resolve the corpus via result_dir / load_lambda_problem
+# coroutine reader must resolve the corpus via result_dir / load_sgrid_problem
 # (NOT hand-written "per_lambda" strings) so future renames are a single flip.
 CORPUS_SUBDIR = "measure"
 
@@ -42,10 +47,10 @@ CORPUS_SUBDIR = "measure"
 # Schema shapes (documented; measurement code targets these).
 # ---------------------------------------------------------------------------
 
-# A single lambda-tier descriptor (backend-agnostic on `level`; native params in
-# fields so we record exactly what was physically set).
+# A single sampling-tier descriptor (backend-agnostic on `level`; native params
+# in fields so we record exactly what was physically set).
 @dataclass
-class LambdaTier:
+class SampleTier:
     level: int                 # abstract level index (outer key in by_lambda)
     S_rows: Optional[int]      # sample rows this tier ANALYZEs (cap at N)
     single_target: Optional[int]   # PG: S/300 (all single cols) ; None if not PG
@@ -64,8 +69,9 @@ class LambdaTier:
 class Meta:
     bench: str
     backend: str
-    # λ axis: the sample tiers sampled (level -> S_rows / single_target / ep).
-    tiers: list[LambdaTier] = field(default_factory=list)
+    # sampling axis: the levels actually sampled (level -> S_rows / single_target
+    # / ep); λ = min(S,N)/N is derived per table.
+    tiers: list[SampleTier] = field(default_factory=list)
     # ext representation-parameter axis (INDEPENDENT of λ; offered per λ only
     # where p <= S_rows/300). Recorded so consumers know the full premeasure grid.
     param_tiers: tuple[int, ...] = ()
@@ -130,7 +136,7 @@ def read_meta(outdir: Path) -> Optional[Meta]:
     if not p.exists():
         return None
     d = json.loads(p.read_text())
-    tiers = [LambdaTier(**t) for t in d.get("tiers", [])]
+    tiers = [SampleTier(**t) for t in d.get("tiers", [])]
     param_tiers = tuple(d.get("param_tiers", []))
     extra = {k: v for k, v in d.items()
              if k not in ("bench", "backend", "tiers", "param_tiers")}

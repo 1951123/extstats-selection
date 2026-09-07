@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from .measure_lambda_io import result_dir
+from .measure_io import result_dir
 
 # Corpus-artifact filename living next to _meta.json inside a corpus dir.
 MAINT_FILE = "_maint.json"
@@ -177,7 +177,7 @@ def write_maint(outdir: Path, workload: str, backend: str,
 # dedicated, DB-timed runner (separate from the per-query measure run), which for
 # each corpus owner-table at each realised λ level:
 #   fixed(t,ℓ) : time the BARE one-refresh scan in the λ-state — i.e.
-#                `enter_lambda_state(table, level)` (PG: 1× ANALYZE of natural
+#                `enter_sampling_state(table, level)` (PG: 1× ANALYZE of natural
 #                single-col stats at S/300; Oracle: 1× GATHER at ep=100·S/N);
 #   c_var(t,ℓ) : from an AGGREGATE whole-scan delta — time one refresh carrying
 #                k representative column-group stats and take (refresh(k)−fixed)/k.

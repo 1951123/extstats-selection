@@ -1,16 +1,21 @@
-"""Sampling-first (λ-first) measurement driver (§7bis).
+"""Sample-first (S-grid) measurement driver (§7bis).
 
-For each query, for each λ-tier ``level``:
-  1. ``backend.enter_lambda_state(table, level)``  -> all single columns at
-     ``S/300``, no extended stat  => measure the per-λ no-ext baseline ``e^0(S)``.
+The PRIMARY axis is the requested sampling level ``S`` (config ``SAMPLING_LEVELS``).
+Per table the realized scan is ``min(S, N_t)``; the fraction
+``lambda = min(S, N_t)/N_t`` is DERIVED (a reporting/fidelity metric), not a
+search axis.
+
+For each query, for each sampling level ``level``:
+  1. ``backend.enter_sampling_state(table, level)``  -> all single columns at
+     ``S/300``, no extended stat  => measure the per-level no-ext baseline ``e^0(S)``.
   2. For each candidate (colset) and each representation param ``p <= S/300``:
      create an MCV object, set its target to ``p``, ANALYZE (the established
-     single-col λ-state already forces the deep shared scan), and record
+     single-column sampling state already forces the deep shared scan), and record
      estimate / q-error / size / per-stat maintenance / fidelity.
 
-This gives, per query, a ``by_lambda`` dict whose outer key is the λ tier and
-each slot carries BOTH its no-ext baseline and the candidate readings measured in
-that same λ-state — the same-``S`` fair pairing the optimizer consumes.
+This gives, per query, a ``by_lambda`` dict keyed by sampling level; each slot
+carries BOTH its no-ext baseline and the candidate readings measured in that
+same level's sampling state — the same-``S`` fair pairing the optimizer consumes.
 
 NOTE on ``maint_var`` (2026-09-06): each slot's ``maint_var`` is currently a
 *placeholder* — the backend's closed-form model constant (PG: 0.002 at L0 / 0.02
@@ -30,7 +35,7 @@ from typing import Optional
 from ..backend.base import Backend, StatObject
 from ..backend.capabilities import Capacity
 from .candidates import CandidateSet
-from .measure_lambda_io import (LambdaTier, Meta, result_dir, write_meta,
+from .measure_io import (SampleTier, Meta, result_dir, write_meta,
                                 write_query_measure)
 from .queries import BenchQuery
 
@@ -51,10 +56,10 @@ from .queries import BenchQuery
 # hindsight): each λ caps it via S/300 and the optimizer dominance-prunes
 # synonyms at solve time.
 
-#: Active experiment λ-tiers (scan-depth indices into the backend ladder). The
-#: two levels L0/L1 realize requested sample rows 30k / 300k (see config
-#: ``SAMPLING_LEVELS``); the canonical drivers in scratch/ pass these by default.
-DEFAULT_LAMBDA_LEVELS: tuple[int, ...] = (0, 1)
+#: Active experiment sampling levels (indices into the S-grid). The two levels
+#: L0/L1 realize requested sample rows 30k / 300k (see config ``SAMPLING_LEVELS``);
+#: the canonical drivers in scratch/ pass these by default.
+DEFAULT_SAMPLING_LEVELS: tuple[int, ...] = (0, 1)
 
 
 def _primary_capability(backend: Backend):
@@ -75,21 +80,21 @@ def _resolve_param_tiers(backend: Backend,
     return tuple(backend.representation_param_tiers(table) or ())
 
 
-def measure_query_lambda(
+def measure_query_sampling(
     backend: Backend,
     query: BenchQuery,
     candidates: list[CandidateSet],
     *,
-    levels: tuple[int, ...] = DEFAULT_LAMBDA_LEVELS,
+    levels: tuple[int, ...] = DEFAULT_SAMPLING_LEVELS,
     param_tiers: Optional[tuple[int, ...]] = None,
     outdir: Optional[Path] = None,
 ) -> dict:
-    """Measure ``query`` across λ tiers; return its ``by_lambda`` block and, if
-    ``outdir`` given, write it as ``<outdir>/<qid>.json``.
+    """Measure ``query`` across sampling levels; return its ``by_lambda`` block
+    and, if ``outdir`` given, write it as ``<outdir>/<qid>.json``.
 
     ``param_tiers=None`` uses the active backend's own representation grid
     (:meth:`Backend.representation_param_tiers`); levels default to
-    :data:`DEFAULT_LAMBDA_LEVELS` (the L0/L1 scan-depth tiers)."""
+    :data:`DEFAULT_SAMPLING_LEVELS` (the L0/L1 scan-depth tiers)."""
     cap_obj = _primary_capability(backend)
     by_lambda: dict[str, dict] = {}
     # Determine the query table from the first candidate (single-table benchs).
@@ -97,12 +102,12 @@ def measure_query_lambda(
     pgrid = _resolve_param_tiers(backend, param_tiers, table)
 
     for level in levels:
-        rows = backend.lambda_sampling_rows(table, level)
+        rows = backend.sample_rows_at_level(table, level)
         single_tgt = backend.single_col_target_for_level(table, level)
         cap_p = backend.max_param_at_level(table, level)
 
-        # 1) per-λ no-ext baseline in the λ-state
-        backend.enter_lambda_state(table, level)
+        # 1) per-level no-ext baseline in the sampling state
+        backend.enter_sampling_state(table, level)
         # ensure no leftover extended stats silently affect the baseline
         for s in list(backend.list_stats(table)):
             backend.drop_stat(s)
@@ -158,19 +163,19 @@ def measure_query_lambda(
     return block
 
 
-def measure_query_lambda_m(
+def measure_query_sampling_m(
     backend: Backend,
     query: BenchQuery,
     candidates: list[CandidateSet],
     *,
-    levels: tuple[int, ...] = DEFAULT_LAMBDA_LEVELS,
+    levels: tuple[int, ...] = DEFAULT_SAMPLING_LEVELS,
     param_tiers: Optional[tuple[int, ...]] = None,
     outdir: Optional[Path] = None,
 ) -> dict:
     """Protocol-M (catalog-mask) per-λ measurement; same output shape as
-    ``measure_query_lambda`` but de-amortizes the fixed scan.
+    ``measure_query_sampling`` but de-amortizes the fixed scan.
 
-    For each λ tier: ``enter_lambda_state`` gives the no-ext baseline ``e^0`` in
+    For each λ tier: ``enter_sampling_state`` gives the no-ext baseline ``e^0`` in
     the S_λ state; then ALL (candidate, param) objects are created and built in a
     SINGLE ANALYZE (``build_stat_params_batch`` — each object set to its own
     param, shared by the established S_λ scan). Each (candidate, param) is then
@@ -189,7 +194,7 @@ def measure_query_lambda_m(
     """
     if not backend.supports_catalog_mask():
         # Not a mask-capable backend: fall back to Protocol-A semantics.
-        return measure_query_lambda(backend, query, candidates, levels=levels,
+        return measure_query_sampling(backend, query, candidates, levels=levels,
                                     param_tiers=param_tiers, outdir=outdir)
 
     cap_obj = _primary_capability(backend)
@@ -199,12 +204,12 @@ def measure_query_lambda_m(
     driver = backend.catalog_driver()
 
     for level in levels:
-        rows = backend.lambda_sampling_rows(table, level)
+        rows = backend.sample_rows_at_level(table, level)
         single_tgt = backend.single_col_target_for_level(table, level)
         cap_p = backend.max_param_at_level(table, level)
 
-        # 1) per-λ no-ext baseline in the λ-state
-        backend.enter_lambda_state(table, level)
+        # 1) per-level no-ext baseline in the sampling state
+        backend.enter_sampling_state(table, level)
         for s in list(backend.list_stats(table)):
             backend.drop_stat(s)
         be = backend.estimate(query)
@@ -278,12 +283,12 @@ def measure_query_lambda_m(
     return block
 
 
-def measure_workload_lambda(
+def measure_workload_sampling(
     backend: Backend,
     queries: list[BenchQuery],
     cands_by_q: dict[str, list[CandidateSet]],
     *,
-    levels: tuple[int, ...] = DEFAULT_LAMBDA_LEVELS,
+    levels: tuple[int, ...] = DEFAULT_SAMPLING_LEVELS,
     param_tiers: Optional[tuple[int, ...]] = None,
     workload: str = "default",
     outdir: Path,
@@ -296,9 +301,9 @@ def measure_workload_lambda(
     and backend (``<outdir>/measure/<workload>/<backend>/``) so neither workload
     nor DBMS engine (which may hold the same columns but different native params)
     collide. ``param_tiers=None`` records the active backend's own representation
-    grid; levels default to :data:`DEFAULT_LAMBDA_LEVELS` (L0/L1). When
+    grid; levels default to :data:`DEFAULT_SAMPLING_LEVELS` (L0/L1). When
     ``use_protocol_m`` is true and the backend can catalog-mask, per-query
-    measurement uses :func:`measure_query_lambda_m` (one shared ANALYZE per λ)
+    measurement uses :func:`measure_query_sampling_m` (one shared ANALYZE per λ)
     instead of per-candidate Protocol-A.
 
     ``skip_existing`` (default True) makes the run **idempotent/incremental**:
@@ -311,7 +316,7 @@ def measure_workload_lambda(
     dest.mkdir(parents=True, exist_ok=True)
     # meta describing the λ tiers actually realized (per the first table's row
     # count via a reference table; native params recorded by level).
-    tiers: list[LambdaTier] = []
+    tiers: list[SampleTier] = []
     table = None
     for cl in cands_by_q.values():
         if cl:
@@ -326,17 +331,17 @@ def measure_workload_lambda(
     for level in levels:
         if table is not None:
             single_tgt = backend.single_col_target_for_level(table, level)
-            rows = backend.lambda_sampling_rows(table, level)
-            ep = backend.lambda_sampling_percent(table, level)
+            rows = backend.sample_rows_at_level(table, level)
+            ep = backend.sample_percent_at_level(table, level)
         else:
             single_tgt = rows = ep = None
-        tiers.append(LambdaTier(level=level, S_rows=rows,
+        tiers.append(SampleTier(level=level, S_rows=rows,
                                 single_target=single_tgt, estimate_percent=ep))
     write_meta(dest, Meta(bench=workload, backend=backend.name(), tiers=tiers,
                           param_tiers=meta_pgrid))
 
-    measurer = measure_query_lambda_m if (
-        use_protocol_m and backend.supports_catalog_mask()) else measure_query_lambda
+    measurer = measure_query_sampling_m if (
+        use_protocol_m and backend.supports_catalog_mask()) else measure_query_sampling
     done = skipped = 0
     for query in queries:
         cands = cands_by_q.get(query.qid, [])

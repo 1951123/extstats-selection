@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda_io import result_dir
+from extstats2.core.measure_io import result_dir
 
 _PG = dict(host="localhost", port=5432, user="postgres", password="postgres")
 _OR = dict(host="localhost", port=1521, user="SYSTEM", password="lxf82073077",
@@ -48,7 +48,7 @@ def main() -> None:
 
     from extstats2.bench import load_benchmark
     from extstats2.core.candidates import generate_candidates_per_query
-    from extstats2.core.measure_lambda_io import Meta, LambdaTier, write_meta
+    from extstats2.core.measure_io import Meta, SampleTier, write_meta
 
     dest = result_dir(Path(args.out), args.bench, args.backend)
     if not dest.exists():
@@ -67,13 +67,13 @@ def main() -> None:
 
     levels = [0, 1]   # S-grid levels
     def _tier(tbl, lv):
-        return {"S_rows": be.lambda_sampling_rows(tbl, lv),
+        return {"S_rows": be.sample_rows_at_level(tbl, lv),
                 "single_target": be.single_col_target_for_level(tbl, lv),
-                "estimate_percent": be.lambda_sampling_percent(tbl, lv)}
+                "estimate_percent": be.sample_percent_at_level(tbl, lv)}
 
     # tiers: lightweight declaration of which lambda levels exist (downstream
     # reads only tiers[].level); the real per-owner-table S is in table_s_rows.
-    tiers = [LambdaTier(level=lv, S_rows=None, single_target=None,
+    tiers = [SampleTier(level=lv, S_rows=None, single_target=None,
                         estimate_percent=None) for lv in levels]
     table_s_rows = {t: {str(lv): _tier(t, lv) for lv in levels}
                     for t in owner_tables}

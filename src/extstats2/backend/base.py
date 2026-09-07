@@ -298,24 +298,27 @@ class Backend(ABC):
         """Estimated row count of ``table`` (None if unknown)."""
         return None
 
-    # -- lambda-state realization (sampling-first model, §7bis) -----------
+    # -- sampling-state realization (sample-first model, §7bis) -----------
 
-    def lambda_sampling_rows(self, table: str, level: int) -> Optional[float]:
-        """Rows the shared ANALYZE/GATHER samples at λ-tier ``level`` (= S_level).
+    def sample_rows_at_level(self, table: str, level: int) -> Optional[float]:
+        """Rows the shared ANALYZE/GATHER samples at sampling level ``level``
+        (= the requested S).
 
-        Alias for :meth:`sample_rows_per_level` (the sample-tier ``S``). Default
-        delegates; backends may override if the λ coordinate differs.
+        Per table the realized scan is ``min(S, N_t)``; the fraction
+        ``lambda = min(S, N_t)/N_t`` is a derived reporting metric. Alias for
+        :meth:`sample_rows_per_level`; backends may override if the sampling
+        coordinate differs.
         """
         return self.sample_rows_per_level(table, level)
 
-    def lambda_sampling_percent(self, table: str, level: int) -> Optional[float]:
-        """The engine's native percent-of-scan that realizes λ at ``level``.
+    def sample_percent_at_level(self, table: str, level: int) -> Optional[float]:
+        """The engine's native percent-of-scan that realizes sampling at ``level``.
 
-        ``None`` on engines (PG) that realize λ via a single-column *target*
-        rather than a percent; Oracle overrides to return its per-table
+        ``None`` on engines (PG) that realize sampling via a single-column
+        *target* rather than a percent; Oracle overrides to return its per-table
         ``estimate_percent = 100·min(S,N)/N``.
         Recorded in the corpus ``_meta.json`` (results/measure) so the same
-        abstract λ level maps to a backend-specific sampling knob for
+        abstract level maps to a backend-specific sampling knob for
         cross-backend comparison.
         """
         return None
@@ -336,27 +339,28 @@ class Backend(ABC):
         return (25, 50, 100, 1000, 10000)
 
     def max_param_at_level(self, table: str, level: int) -> Optional[float]:
-        """Lattice cap on a representation param at λ-tier ``level``: ``S/300``.
+        """Lattice cap on a representation param at sampling level ``level``:
+        ``S/300``.
 
         On PG this equals the single-column target (``S_level/300``). Backends
         return ``None`` if the cap is not engine-imposed (Oracle) — the caller
         then applies it as an optional guard.
         """
-        rows = self.lambda_sampling_rows(table, level)
+        rows = self.sample_rows_at_level(table, level)
         return None if rows is None else rows / 300.0
 
     def single_col_target_for_level(self, table: str, level: int) -> Optional[int]:
-        """PG's native handle realizing λ at ``level``: set every single column
-        to this attribute target. Oracle returns ``None`` (it uses
+        """PG's native handle realizing sampling at ``level``: set every single
+        column to this attribute target. Oracle returns ``None`` (it uses
         ``estimate_percent`` instead)."""
         cap = self.max_param_at_level(table, level)
         return None if cap is None else int(cap)
 
-    def enter_lambda_state(self, table: str, level: int) -> None:
-        """Realize λ-tier ``level`` on ``table``: all single columns at
+    def enter_sampling_state(self, table: str, level: int) -> None:
+        """Realize sampling level ``level`` on ``table``: all single columns at
         ``S_level/300`` (PG) / a single-col gather at depth (Oracle), and **no
         extended statistic present**. After this, ``estimate`` gives the no-ext
-        per-λ baseline ``e^0(S_level)``; a candidate object added at
+        per-level baseline ``e^0(S_level)``; a candidate object added at
         ``param ≤ S_level/300`` shares this established deep scan (free-rider).
         Backends must override to actually realize the depth; the default only
         sets the abstract capacity and is not physically meaningful.
@@ -372,7 +376,7 @@ class Backend(ABC):
 
     def build_stat_params_batch(self, objs_params: list[tuple[StatObject, int]]) -> None:
         """Protocol-M batch: build several objects at their OWN params, de-
-        amortizing the shared (λ-state) scan into ONE ANALYZE instead of N.
+        amortizing the shared (sampling-state) scan into ONE ANALYZE instead of N.
 
         PG overrides (SET each object's target, then ANALYZE once). The default
         (no inline-mask backend) falls back to per-object ``build_stat_param`` —

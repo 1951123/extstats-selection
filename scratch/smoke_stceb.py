@@ -12,8 +12,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from extstats2.config import DBConfig, get_backend
 from extstats2.bench import load_benchmark
 from extstats2.core.candidates import generate_candidates_per_query, CandidateSet
-from extstats2.core.measure_lambda import DEFAULT_LAMBDA_LEVELS, measure_query_lambda_m
-from extstats2.core.measure_lambda_io import result_dir, write_meta, Meta, LambdaTier
+from extstats2.core.measure_sampling import DEFAULT_SAMPLING_LEVELS, measure_query_sampling_m
+from extstats2.core.measure_io import result_dir, write_meta, Meta, SampleTier
 from extstats2.backend.postgres import PostgresBackend as _PB  # noqa
 
 def main():
@@ -33,8 +33,8 @@ def main():
     tiers = []
     for lv in a.levels:
         st = be.single_col_target_for_level(table_src, lv)
-        rows = be.lambda_sampling_rows(table_src, lv)
-        tiers.append(LambdaTier(level=lv, S_rows=rows, single_target=st, estimate_percent=None))
+        rows = be.sample_rows_at_level(table_src, lv)
+        tiers.append(SampleTier(level=lv, S_rows=rows, single_target=st, estimate_percent=None))
     write_meta(dest, Meta(bench="stats_ceb_single", backend="postgres", tiers=tiers,
                           param_tiers=be.representation_param_tiers()))
     from extstats2.core.candidates import CandidateSet
@@ -55,7 +55,7 @@ def main():
         print(f"{qid}: table={t} n_cand={len(cands)}")
         if not cands:
             continue
-        block = measure_query_lambda_m(be, q, cands, levels=tuple(a.levels),
+        block = measure_query_sampling_m(be, q, cands, levels=tuple(a.levels),
                                        param_tiers=None, outdir=dest)
         # cleanup this query's own table leftover stats
         for s in list(be.list_stats(t)):

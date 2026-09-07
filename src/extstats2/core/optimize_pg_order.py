@@ -1,6 +1,6 @@
 """PG-specific OID-order selector (deployment-stage concern, NOT the generic
 core optimizer).  The chosen-stat SET comes from the frozen generic optimizer
-(optimize.py / optimize_lambda.build_inner_at_level); THIS module only orders
+(optimize.py / optimize_sgrid.build_inner_at_level); THIS module only orders
 CREATE (OID) for PG deployment so each query is served by its best applicable
 chosen statistic under PG's first-applicable-by-OID planner semantics.  Kept as
 a deploy-layer concern (see docs/deploy.md), algorithm still valid.
@@ -8,7 +8,7 @@ a deploy-layer concern (see docs/deploy.md), algorithm still valid.
 PG-specific OID-order selector, Phase 2 (two-phase design).
 
 Phase 1 = the *generic* optimiser (untouched, ``optimize.py`` /
-``optimize_lambda.build_inner_at_level``): it selects a (colset, param) SET under
+``optimize_sgrid.build_inner_at_level``): it selects a (colset, param) SET under
 a budget, maximising interference-free predicted quality.
 
 Phase 2 (this module): PostgreSQL 16's planner uses, for each query, the first

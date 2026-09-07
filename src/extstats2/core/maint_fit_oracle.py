@@ -6,7 +6,7 @@ column groups are GATHERed and share the single scan (FIXED_ONLY), so:
 
     fixed(t, ℓ)  : one-refresh GATHER of the bare table (natural single-column,
                    SIZE AUTO) at the λ level's realized estimate_percent
-                   (enter_lambda_state). = the shared scan cost.
+                   (enter_sampling_state). = the shared scan cost.
     c_var(t, ℓ)  : marginal per column-group — by Oracle's FIXED_ONLY model the
                    per-group residual under the shared scan is real-but-tiny; we
                    still measure it by the aggregate whole-scan difference (a

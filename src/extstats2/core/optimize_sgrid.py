@@ -1,15 +1,19 @@
-"""Optimizer consumer for the per-λ (sampling-first) premeasure output (§7bis).
+"""Optimizer consumer for the per-Sampling-level (S-grid) premeasure output.
 
 Reads ``results/measure/<workload>/<backend>/`` (per-query ``by_lambda`` files
-+ ``_meta.json``) and for each λ tier assembles the *inner* selection problem:
-   - per-λ no-ext baseline ``qbase_i = by_lambda[level].baseline.qerror`` (same-S
-     reference), and
-   - candidate readings ``(colset, param) → qerror`` offered at that λ (params
-     already bounded by ``p <= S_λ/300`` at measure time).
++ ``_meta.json``) and for each sampling level ``S`` assembles the *inner*
+selection problem:
+   - the level's no-ext baseline ``qbase_i = by_lambda[level].baseline.qerror``
+     (same-S reference), and
+   - candidate readings ``(colset, param) → qerror`` offered at that level (params
+     already bounded by ``p <= S/300`` at measure time).
 It then solves the sparse one-stat-sufficiency MILP (per-query cap 1) under a
-storage budget for that λ, and reports the achievable mean q-error + selected
-stats. The outer loop over λ (adding ``Σ_t ρ_t f_t(λ)`` per-table fixed cost) is
-layered on top by the caller / a convenience search here.
+storage budget for that level, and reports the achievable mean q-error + selected
+stats. The outer loop over sampling levels ``S`` (adding ``Σ_t ρ_t f_t(S)``
+per-table fixed cost) is layered on top by the caller / a convenience search here.
+
+λ is derived per table as ``min(S, N_t)/N_t`` and is a reporting metric, not the
+axis searched here (the axis is ``S ∈ SAMPLING_LEVELS``).
 """
 
 from __future__ import annotations
@@ -19,11 +23,11 @@ from typing import Optional
 
 import numpy as np
 
-from .measure_lambda_io import list_qids, read_meta, read_query_measure, result_dir
+from .measure_io import list_qids, read_meta, read_query_measure, result_dir
 from .optimize import (Option, OptimizerClass, PhysicalStat, solve_ilp)
 
 
-def load_lambda_problem(outdir: Path, workload: str, backend: str):
+def load_sgrid_problem(outdir: Path, workload: str, backend: str):
     """Load a workload's saved per-λ results as (meta, per_query_blocks)."""
     d = result_dir(outdir, workload, backend)
     meta = read_meta(d)
@@ -127,7 +131,7 @@ def inner_optimal_at_level(blocks, level, budget_bytes, *,
     return res, phys, qbases
 
 
-def search_lambda(outdir: Path, workload: str, backend: str,
+def search_sgrid(outdir: Path, workload: str, backend: str,
                   budget_bytes: int, *, maint_budget: Optional[float] = None,
                   fixed_per_table: Optional[dict] = None,
                   rho: float = 0.0) -> dict:
@@ -138,7 +142,7 @@ def search_lambda(outdir: Path, workload: str, backend: str,
     Returns per-level outcome rows: {level, mean_qerror(baseline), mean_qerror(deployed),
     n_selected, total_bytes, total_maint, selected_summary}.
     """
-    meta, blocks = load_lambda_problem(outdir, workload, backend)
+    meta, blocks = load_sgrid_problem(outdir, workload, backend)
     levels = [str(t.level) for t in (meta.tiers if meta else [])]
     out: dict[str, dict] = {}
     for level in levels:

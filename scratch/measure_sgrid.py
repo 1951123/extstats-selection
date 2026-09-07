@@ -7,7 +7,7 @@ benchmark at the S-grid levels (default 0,1) for one backend, writing one JSON
 per query under ``results/measure/<bench>/<backend>/``.
 
 Driver strategy (chooses the backend's own measure path automatically):
-  - ``measure_query_lambda_m`` dispatches: PG (catalog-mask capable) -> the
+  - ``measure_query_sampling_m`` dispatches: PG (catalog-mask capable) -> the
     Protocol-M path (~1 scan per λ per query, cheap); Oracle -> falls back to
     Protocol-A (one GATHER per candidate x level, the honest cost).
   - Oracle Protocol-A is serial and must not race the shared catalog: run with a
@@ -38,8 +38,8 @@ import time
 from pathlib import Path
 
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda import (DEFAULT_LAMBDA_LEVELS,
-                                           measure_query_lambda_m)
+from extstats2.core.measure_sampling import (DEFAULT_SAMPLING_LEVELS,
+                                           measure_query_sampling_m)
 
 # Per-backend connection (dotted 'table' keys on each engine).
 _PG = dict(host="localhost", port=5432, user="postgres", password="postgres",
@@ -63,7 +63,7 @@ def main() -> None:
     ap.add_argument("--bench", required=True,
                     choices=["census", "stats_ceb_single", "dmv"])
     ap.add_argument("--backend", required=True, choices=["postgres", "oracle"])
-    ap.add_argument("--levels", type=int, nargs="+", default=list(DEFAULT_LAMBDA_LEVELS))
+    ap.add_argument("--levels", type=int, nargs="+", default=list(DEFAULT_SAMPLING_LEVELS))
     ap.add_argument("--pgdb", default=None,
                     help="PG database name (census/dmv/stats_ceb_single) holding the table")
     ap.add_argument("--out", default="results")
@@ -76,7 +76,7 @@ def main() -> None:
 
     from extstats2.bench import load_benchmark
     from extstats2.core.candidates import generate_candidates_per_query
-    from extstats2.core.measure_lambda_io import (result_dir, Meta, LambdaTier,
+    from extstats2.core.measure_io import (result_dir, Meta, SampleTier,
                                                   write_meta)
 
     be = _backend(args.backend, pgdb)
@@ -98,9 +98,9 @@ def main() -> None:
     owner_tables = sorted({cands[0].table for cands in cand_all.values() if cands})
 
     def _tier_meta(tbl: str, lv: int) -> dict:
-        rows = be.lambda_sampling_rows(tbl, lv)
+        rows = be.sample_rows_at_level(tbl, lv)
         st = be.single_col_target_for_level(tbl, lv)
-        ep = be.lambda_sampling_percent(tbl, lv)
+        ep = be.sample_percent_at_level(tbl, lv)
         return {"S_rows": rows, "single_target": st, "estimate_percent": ep}
 
     # tiers: a lightweight DECLARATION of which lambda levels exist (downstream
@@ -109,7 +109,7 @@ def main() -> None:
     # S-grid's realized S depends on each owner table's N (which spans multiple
     # tables on stats_CEB_single), a single tiers.S_rows would be ambiguous/re-
     # dundant; record S only once, per table.
-    tiers = [LambdaTier(level=lv, S_rows=None, single_target=None,
+    tiers = [SampleTier(level=lv, S_rows=None, single_target=None,
                         estimate_percent=None) for lv in args.levels]
     # Full per-owner-table S map (single authoritative source of realized S).
     table_s_rows: dict[str, dict] = {}
@@ -152,7 +152,7 @@ def main() -> None:
             except Exception:
                 pass
         try:
-            measure_query_lambda_m(be, q, cands, levels=tuple(args.levels),
+            measure_query_sampling_m(be, q, cands, levels=tuple(args.levels),
                                    param_tiers=None, outdir=dest)
             done += 1
         except Exception as e:  # noqa: BLE001 - keep the run alive

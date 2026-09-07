@@ -36,9 +36,9 @@ def get_backend(name: str, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# S-grid sampling levels (CANONICAL truth for the lambda-first design)
+# S-grid sampling levels (CANONICAL truth for the sample-first design)
 # ---------------------------------------------------------------------------
-# The current / canonical S-grid / lambda-first model keys sampling by the
+# The current / canonical S-grid / sample-first model keys sampling by the
 # REQUESTED sample rows S_L per level L (the old v1 "capacity level -> native
 # knob" 3-level ladder was removed — single-version policy).
 #   * Two levels today:  L0 -> 30k rows, L1 -> 300k rows (project scope;
@@ -49,10 +49,11 @@ def get_backend(name: str, **kwargs):
 #   * Each backend maps the SAME realized-S to its native parameter:
 #         PG      : statistics_target = S_L / 300   (=> single_col target 100/1000)
 #         Oracle  : estimate_percent   = 100 * S_realized(t,L) / N_t
-#     (precisely what core.measure_lambda / the backend lambda_S helpers drive).
+#     (precisely what core.measure_sampling / the backend S-realization helpers
+#     drive).
 #
-# The active lambda tier indices used by core.measure_lambda are the SAME
-# DEFAULT_LAMBDA_LEVELS=(0,1); they are kept there (not referenced into a
+# The active sampling-level indices used by core.measure_sampling are the SAME
+# DEFAULT_SAMPLING_LEVELS=(0,1); they are kept there (not referenced into a
 # backend-importing module) to avoid a config<->core import cycle.
 SAMPLING_LEVELS: dict[int, int] = {
     0: 30000,     # L0 : requested sample rows

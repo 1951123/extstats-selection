@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from extstats2.config import DBConfig, get_backend
 from extstats2.bench import load_benchmark
 from extstats2.core.predicates import predicate_columns
-from extstats2.core.measure_lambda_io import read_query_measure
+from extstats2.core.measure_io import read_query_measure
 
 
 def _qtab(q):
@@ -34,12 +34,12 @@ def metrics(qs):
 
 
 def main(level, budget, db, table_for_meta, out, strategy="naive"):
-    from extstats2.core.optimize_lambda import load_lambda_problem, build_inner_at_level
+    from extstats2.core.optimize_sgrid import load_sgrid_problem, build_inner_at_level
     from extstats2.core.optimize import solve_ilp, OptimizerClass
     from extstats2.backend.base import StatObject
     from extstats2.backend.capabilities import Capacity
     corpus = ROOT / "results" / "measure" / "stats_ceb_single" / "postgres"
-    meta, blocks = load_lambda_problem(ROOT/"results"/"measure", "stats_ceb_single", "postgres")
+    meta, blocks = load_sgrid_problem(ROOT/"results"/"measure", "stats_ceb_single", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, str(level), skip_worse_than_baseline=True)
     res = solve_ilp(phys, list(opts), [float(v) for v in qbases], budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR, per_query_cap=1)

@@ -14,7 +14,7 @@ Maintenance of a deployed set is a single per-table ``ANALYZE`` that scans
 ``S = 300 * target`` rows (single columns pinned to the λ target ``S/300``) and
 computes the table's extended statistics. Timing protocol per ``(table, ℓ)``:
 
-1. Establish the λ-state: ``enter_lambda_state(table, level)`` (sets every single
+1. Establish the λ-state: ``enter_sampling_state(table, level)`` (sets every single
    column's ``attstattarget`` to ``S/300`` and ANALYZEs once). ``fixed`` is taken
    as the median wall-time of ``n`` further bare ``ANALYZE t`` calls (no DDL in the
    timed loop — ALTER/SET happen once up front, so the timed op is the recurring
@@ -151,7 +151,7 @@ def measure_table_maintenance_pg(backend: PostgresBackend, table: str, level: in
     tgt = backend._target_for_level(table, level)
     if tgt is None:
         raise KeyError(f"level {level} not realised on {table!r}")
-    backend.enter_lambda_state(table, level) if not analyze_only else None
+    backend.enter_sampling_state(table, level) if not analyze_only else None
 
     # ---- fixed @ n=0 (no ext stats) -------------------------------------
     _time_analyze_once(backend, table)         # warm (untimed)

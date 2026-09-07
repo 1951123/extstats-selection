@@ -16,7 +16,7 @@ import sys, re
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 from extstats2.core.candidates import iter_candidates_for_query
-from extstats2.core.measure_lambda import measure_query_lambda
+from extstats2.core.measure_sampling import measure_query_sampling
 
 be_name = sys.argv[1] if len(sys.argv) > 1 else "postgres"
 if be_name == "postgres":
@@ -44,7 +44,7 @@ for q in queries:
     cands = [c for c in iter_candidates_for_query(q, arities=(2,))]
     print(f"[{be_name}] {q.qid} table={tkey} n_arity2_cands={len(cands)} truth={q.ground_truth}")
     # measure at L2 only (small table; stable)
-    block = measure_query_lambda(be, q, cands[:40], levels=(2,), outdir=None)
+    block = measure_query_sampling(be, q, cands[:40], levels=(2,), outdir=None)
     for lv, L in block["by_lambda"].items():
         base = L["baseline"]["qerror"]
         cs = sorted(L["candidates"], key=lambda c: c["qerror"])

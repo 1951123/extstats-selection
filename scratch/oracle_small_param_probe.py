@@ -53,7 +53,7 @@ def gather(size):
         be.drop_stat(obj)
 
 print(f"q.184 truth={q.ground_truth} | driver pair {COLS} @ L{LV}")
-be.enter_lambda_state(".climate", LV)
+be.enter_sampling_state(".climate", LV)
 b = be.estimate(q).qerror
 print(f"L{LV} no-ext baseline qerr={b:.1f}")
 print(f"{'SIZE p':>7}{'realized_buckets':>17}{'est':>10}{'qerr':>8}")

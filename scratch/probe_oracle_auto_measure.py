@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda import measure_query_lambda
+from extstats2.core.measure_sampling import measure_query_sampling
 from extstats2.bench import load_benchmark
 from extstats2.core.candidates import generate_candidates_per_query
 
@@ -108,7 +108,7 @@ def main():
         cands = cand_all.get(qid, [])
         t0 = time.time()
         try:
-            block = measure_query_lambda(be, q, cands, levels=(0,),
+            block = measure_query_sampling(be, q, cands, levels=(0,),
                                          param_tiers=None, outdir=out)
         except Exception as e:  # noqa: BLE001
             print(f"{qid:<11}  {ep_label} measure FAILED: {type(e).__name__}: {e}")
@@ -123,7 +123,7 @@ def main():
         print(f"{qid:<11}{p1bl:>10.2f}{abl:>12.2f}  "
               f"{p1best:>9.2f}{abest:>12.2f}  {dt:5.0f}s", flush=True)
 
-    # leave tables clean (full AUTO natural, no groups) -> enter_lambda_state in the
+    # leave tables clean (full AUTO natural, no groups) -> enter_sampling_state in the
     # AUTO measure already produced natural AUTO stats as the LAST state for each q,
     # but candidate groups were dropped per-candidate; drop any leftover + natural.
     for s in list(be.list_stats(TABLE)):

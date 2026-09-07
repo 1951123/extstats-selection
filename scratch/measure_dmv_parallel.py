@@ -33,9 +33,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from extstats2.config import DBConfig, get_backend
-from extstats2.core.measure_lambda import (DEFAULT_LAMBDA_LEVELS,
-                                           measure_query_lambda_m)
-from extstats2.core.measure_lambda_io import LambdaTier, Meta, result_dir, write_meta
+from extstats2.core.measure_sampling import (DEFAULT_SAMPLING_LEVELS,
+                                           measure_query_sampling_m)
+from extstats2.core.measure_io import SampleTier, Meta, result_dir, write_meta
 
 
 def _worker(args: dict) -> int:
@@ -44,7 +44,7 @@ def _worker(args: dict) -> int:
     from extstats2.bench import load_benchmark
     from extstats2.core.candidates import (CandidateSet,
                                            generate_candidates_per_query)
-    from extstats2.core.measure_lambda import measure_query_lambda_m
+    from extstats2.core.measure_sampling import measure_query_sampling_m
 
     mirror = args["mirror_db"]
     bench = args["bench"]
@@ -82,7 +82,7 @@ def _worker(args: dict) -> int:
             except Exception:
                 pass
         try:
-            measure_query_lambda_m(be, q, cands, levels=levels,
+            measure_query_sampling_m(be, q, cands, levels=levels,
                                    param_tiers=None, outdir=outdir)
         except Exception as e:
             print(f"[{mirror}] ERR {qid}: {e}", flush=True)
@@ -102,7 +102,7 @@ def main() -> None:
     ap.add_argument("--dbprefix", default="dmv_m")
     ap.add_argument("--table", default=".dmv")
     ap.add_argument("--arities", type=int, nargs="+", default=[2])
-    ap.add_argument("--levels", type=int, nargs="+", default=list(DEFAULT_LAMBDA_LEVELS))
+    ap.add_argument("--levels", type=int, nargs="+", default=list(DEFAULT_SAMPLING_LEVELS))
     ap.add_argument("--bench", default="dmv")
     ap.add_argument("--processes", type=int, default=None)
     args = ap.parse_args()
@@ -134,11 +134,11 @@ def main() -> None:
     # the lambda LEVELS that exist; the single authoritative per-table realized S
     # grid lives in extra.table_s_rows (PG: S_rows/single_target; estimate_percent
     # is an Oracle-only notion -> null on PG).
-    tiers = [LambdaTier(level=lv, S_rows=None, single_target=None,
+    tiers = [SampleTier(level=lv, S_rows=None, single_target=None,
                         estimate_percent=None) for lv in args.levels]
     tbl = args.table
     table_s_rows = {tbl: {str(lv): {
-        "S_rows": be0.lambda_sampling_rows(tbl, lv),
+        "S_rows": be0.sample_rows_at_level(tbl, lv),
         "single_target": be0.single_col_target_for_level(tbl, lv),
         "estimate_percent": None} for lv in args.levels}}
     write_meta(outdir, Meta(bench=args.bench, backend="postgres", tiers=tiers,

@@ -66,7 +66,7 @@ disco_pairs = [
 ]
 
 # ---- discovery at L1 (fast) ----
-be.enter_lambda_state(".climate", 1)
+be.enter_sampling_state(".climate", 1)
 b1 = be.estimate(q).qerror
 print(f"q.184 truth={q.ground_truth} | L1 no-ext baseline qerr={b1:.1f}")
 print("\n== discovery (SIZE 254 @ L1, fast) ==")
@@ -91,7 +91,7 @@ for (p, nb, est, qerr, imp) in winners:
 # ---- sweep SIZE at deep L2 on the top-1 driver ----
 wp = winners[0][0]
 print(f"\nWINNER driver pair = {wp}; sweep SIZE @ L2")
-be.enter_lambda_state(".climate", 2)
+be.enter_sampling_state(".climate", 2)
 b2 = be.estimate(q).qerror
 print(f"L2 no-ext baseline qerr={b2:.1f}")
 print(f"{'SIZE p':>7}{'buckets':>12}{'est':>11}{'qerr':>9}")

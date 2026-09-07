@@ -226,16 +226,16 @@ def test_backend_factory_contracts():
 
 def test_catalog_mask_capability_contract():
     """PG advertises inline catalog-mask (Protocol-M) + a driver; Oracle does not."""
-    from extstats2.core.measure_lambda import measure_query_lambda_m
+    from extstats2.core.measure_sampling import measure_query_sampling_m
     pg = get_backend("postgres")
     orc = get_backend("oracle")
     assert pg.supports_catalog_mask() is True
     assert pg.catalog_driver() is not None
     assert orc.supports_catalog_mask() is False
     assert orc.catalog_driver() is None
-    # measure_query_lambda_m is importable and shares measure_query_lambda's fallback
+    # measure_query_sampling_m is importable and shares measure_query_sampling's fallback
     # entry (callers on non-mask backends get Protocol-A, tested in integration).
-    assert callable(measure_query_lambda_m)
+    assert callable(measure_query_sampling_m)
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +420,7 @@ def _mk_lambda_block(qid, actual, lam_blocks):
 def test_lambda_consumer_per_lambda_baseline_and_lattice_candidates():
     """Each λ slot carries its own baseline + candidate params bounded by
     p<=S/300; the consumer uses the λ-specific baseline (not a global one)."""
-    from extstats2.core.optimize_lambda import build_inner_at_level
+    from extstats2.core.optimize_sgrid import build_inner_at_level
     # λ0 holds only p=100 (its baseline at 300k), λ1 offers p up to 1000.
     blocks = {
         "q1": _mk_lambda_block("q1", 100, {
@@ -445,7 +445,7 @@ def test_lambda_consumer_per_lambda_baseline_and_lattice_candidates():
 def test_lambda_consumer_maint_budget_binds():
     """A maintenance budget on the per-λ inner solver is a hard cap: it keeps
     total_maint <= budget and (for a tight cap) drops selections."""
-    from extstats2.core.optimize_lambda import inner_optimal_at_level
+    from extstats2.core.optimize_sgrid import inner_optimal_at_level
     # one query, λ0, many cheap storage / per-stat maint 0.1 candidates
     cands = [(("a%d" % i, "b%d" % i), 100, float(i + 2), 50) for i in range(8)]
     blocks = {"q1": _mk_lambda_block("q1", 100, {

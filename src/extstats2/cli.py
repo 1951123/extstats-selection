@@ -2,7 +2,7 @@
 
 NOTE (legacy-cleaning batch-3): this is a *validation shell*, not the full
 pipeline CLI.  It models the backend selection & S-grid sampling configuration;
-the real S-grid / lambda-first experiment drivers live in scratch/
+the real S-grid / sample-first experiment drivers live in scratch/
 (measure_sgrid.py, etc.).  The interface talks S-grid sampling LEVELS (L0=30k /
 L1=300k requested rows), NOT the old v1 three-level "capacity" abstraction.
 
