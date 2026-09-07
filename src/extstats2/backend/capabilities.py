@@ -7,9 +7,10 @@ captures*, and every backend maps it to its own native object / DDL / catalog
 representation.
 
 The core algorithm (`core/`) reasons only about :class:`Capability` (via its
-core name, e.g. ``"mcv"``) and an *abstract capacity level index*. Each backend
-is responsible for translating those into concrete parameters
-(e.g. PG ``statistics_target``, Oracle ``estimate_percent`` / ``BUCKETS``).
+core name, e.g. ``"mcv"``) and an abstract *sampling level index*
+(:class:`SamplingLevel`). Each backend is responsible for translating those
+into concrete parameters (e.g. PG ``statistics_target``, Oracle
+``estimate_percent``).
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ class Capability:
         capability (e.g. PG ``"dependencies"``; Oracle ``"column_group"``).
     capacity_param:
         Human-readable name of the backend parameter that controls how much
-        the statistic's capacity (sampling / storage) is:
+        the statistic samples / costs:
         ``"statistics_target"`` (PG) or ``"estimate_percent"`` (Oracle).
     supported:
         Whether this backend can actually build the capability. A backend may
@@ -75,17 +76,17 @@ def default_measure_capabilities(caps: list["Capability"]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Capacity model
+# SamplingLevel model
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class Capacity:
-    """An abstract capacity level.
+class SamplingLevel:
+    """An abstract sampling level (S-grid index).
 
-    ``level`` is a *level index* a backend maps onto its native parameter value
-    (PG single-column ``statistics_target``, Oracle sample rows / bucket size).
-    The core never interprets the numeric value; it only passes it through so
-    each backend can translate it into its own representation.
+    ``level`` is the S-grid sampling-level index a backend maps onto its native
+    scan parameter (PG ``statistics_target = S/300``, Oracle
+    ``estimate_percent = 100*min(S,N)/N``). The core never interprets the numeric
+    value; it only passes it through so each backend can translate it.
 
     ``label`` is optional and used for result metadata / reporting.
     """
@@ -94,12 +95,12 @@ class Capacity:
     label: str = ""
 
     def __repr__(self) -> str:
-        return f"Capacity({self.level}{',' + repr(self.label) if self.label else ''})"
+        return f"SamplingLevel({self.level}{',' + repr(self.label) if self.label else ''})"
 
     @classmethod
-    def index(cls, level: int) -> "Capacity":
+    def index(cls, level: int) -> "SamplingLevel":
         return cls(level)
 
 
-# A convenient "no capacity" sentinel (e.g. baseline measurement with no ext stat).
-CAPACITY_NONE = Capacity(0, label="none")
+# A convenient "no sampling level" sentinel (baseline measurement with no ext stat).
+SAMPLING_NONE = SamplingLevel(0, label="none")

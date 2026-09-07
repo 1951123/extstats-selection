@@ -12,7 +12,7 @@ cap the sweep at 1000.
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 from extstats2.backend.base import StatObject
-from extstats2.backend.capabilities import Capacity
+from extstats2.backend.capabilities import SamplingLevel
 from extstats2.backend.oracle import _text, _parse_extension_expression
 
 OR = DBConfig(host="localhost", port=1521, user="SYSTEM",
@@ -44,7 +44,7 @@ def hidden_buckets(cols):
 
 def build_measure(cols, size, level):
     obj = StatObject(table=".climate", columns=list(cols), capability=mcv,
-                     capacity=Capacity(level), name=f"disc_l{level}_{size}")
+                     sampling_level=SamplingLevel(level), name=f"disc_l{level}_{size}")
     be.create_stat(obj)
     try:
         be.build_stat_param(obj, size)

@@ -121,7 +121,7 @@ class Config:
     bench: str = "census"
     budget_bytes: int = 0              # storage budget; 0 = unlimited
     maint_budget: Optional[float] = None  # maintenance budget; None/0 = unconstrained
-    capacities: tuple[int, ...] = (0, 1)   # S-grid sampling level indices (L0/L1);
+    sampling_levels: tuple[int, ...] = (0, 1)   # S-grid sampling level indices (L0/L1);
                                     # maps to requested rows via SAMPLING_LEVELS
     db: DBConfig = field(default_factory=DBConfig.from_env)
 

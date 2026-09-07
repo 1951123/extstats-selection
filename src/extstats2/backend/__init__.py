@@ -19,9 +19,9 @@ from .base import (
 )
 from .capabilities import (
     CANONICAL_CAPABILITIES,
-    CAPACITY_NONE,
+    SAMPLING_NONE,
     Capability,
-    Capacity,
+    SamplingLevel,
 )
 from .catalog import CatalogDriver, PayloadBackup
 
@@ -34,8 +34,8 @@ __all__ = [
     "MaintStructure",
     "qerror",
     "Capability",
-    "Capacity",
-    "CAPACITY_NONE",
+    "SamplingLevel",
+    "SAMPLING_NONE",
     "CANONICAL_CAPABILITIES",
     "CatalogDriver",
     "PayloadBackup",

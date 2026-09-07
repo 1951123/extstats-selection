@@ -32,7 +32,7 @@ from .base import (
     StatObject,
     StructuralProps,
 )
-from .capabilities import Capability, Capacity
+from .capabilities import Capability, SamplingLevel
 
 # ---------------------------------------------------------------------------
 # Capabilities & defaults
@@ -61,7 +61,7 @@ _KIND_DATA_TYPE = {
 # Leading ``SELECT COUNT(*)`` (case-insensitive).
 _SELECT_COUNT_RE = re.compile(r"(?is)^\s*SELECT\s+COUNT\(\*\)\s+")
 
-# Default capacity ladder: abstract level index -> statistics_target.
+# Default sampling ladder: abstract S-grid level index -> statistics_target.
 #
 # 2026-09-05 S-grid policy: sampling LEVELS are defined by SAMPLE ROWS S, not
 # by a DBMS-native knob. The global S_rows grid is [30000, 300000]; PG realizes S via
@@ -73,7 +73,7 @@ _SELECT_COUNT_RE = re.compile(r"(?is)^\s*SELECT\s+COUNT\(\*\)\s+")
 #   N >= 300000             -> L0=30000, L1=300000            ({30000, 300000})
 # The former L2 target 10000 (S up to 3M) is dropped: its S exceeds the S-grid
 # 300000 cap and is never realized on any table.
-DEFAULT_CAPACITY_LADDER = {
+DEFAULT_SAMPLING_LADDER = {
     0: 100,
     1: 1000,
 }
@@ -234,16 +234,16 @@ class PgCatalogDriver:
 
 
 class PostgresBackend(Backend):
-    """PostgreSQL 16 backend. Holds its own connection and capacity ladder."""
+    """PostgreSQL 16 backend. Holds its own connection and sampling ladder."""
 
     def __init__(
         self,
         cfg: Optional[DBConfig] = None,
-        capacity_ladder: Optional[dict[int, int]] = None,
+        sampling_ladder: Optional[dict[int, int]] = None,
     ):
         self._cfg = cfg or DBConfig.from_env()
-        # backend-owned capacity ladder: level index -> statistics_target
-        self._ladder = dict(capacity_ladder or DEFAULT_CAPACITY_LADDER)
+        # backend-owned sampling ladder: level index -> statistics_target
+        self._ladder = dict(sampling_ladder or DEFAULT_SAMPLING_LADDER)
         self._conn: Optional[Connection] = None
         # tables whose regular (single) columns we have already pinned to
         # _SINGLE_COL_STATISTICS_TARGET on this connection (cache: pin once).
@@ -281,8 +281,9 @@ class PostgresBackend(Backend):
     def structural_props(self) -> StructuralProps:
         # PG supports the sparse-linear class and column-disjoint pruning
         # (verified in v1: one-stat sufficiency + global_disjoint predicts 1.000),
-        # ANALYZE cost is a fixed sample base + additive per-stat update, capacity
-        # is per-statistic (statistics_target). Objective: mean (extend later).
+        # ANALYZE cost is a fixed sample base + additive per-stat update;
+        # sampling depth is per-statistic (statistics_target). Objective: mean
+        # (extend later).
         return StructuralProps(
             sparse_one_stat=True,
             disjoint_supported=True,
@@ -298,20 +299,21 @@ class PostgresBackend(Backend):
         """Return this backend's Protocol-M catalog driver."""
         return PgCatalogDriver(self)
 
-    # -- capacity ----------------------------------------------------------
+    # -- sampling level (S-grid) session knob ----------------------------
 
-    def set_capacity(self, capacity: Capacity) -> None:
-        """Set ``default_statistics_target`` to this capacity's native value."""
-        target = self._native_target(capacity)
+    def set_sampling_level(self, sampling_level: SamplingLevel) -> None:
+        """Set ``default_statistics_target`` to this sampling level's native
+        value."""
+        target = self._native_target(sampling_level)
         self._set_default_target(target)
 
-    def _native_target(self, capacity: Capacity) -> int:
-        """Map an abstract capacity level to a statistics_target."""
-        if capacity.level not in self._ladder:
+    def _native_target(self, sampling_level: SamplingLevel) -> int:
+        """Map an abstract sampling level index to a statistics_target."""
+        if sampling_level.level not in self._ladder:
             raise KeyError(
-                f"capacity level {capacity.level!r} not in ladder {self._ladder}"
+                f"sampling level {sampling_level.level!r} not in ladder {self._ladder}"
             )
-        return int(self._ladder[capacity.level])
+        return int(self._ladder[sampling_level.level])
 
     def _set_default_target(self, target: int) -> None:
         with self.conn.cursor() as cur:
@@ -346,7 +348,7 @@ class PostgresBackend(Backend):
         with self.conn.cursor() as cur:
             cur.execute(f"ANALYZE {_clean_table(table)}")
 
-    def build_stats(self, objs: list[StatObject], capacity: Capacity) -> None:
+    def build_stats(self, objs: list[StatObject], sampling_level: SamplingLevel) -> None:
         """Set the extended-stat target, pin single columns to 100, ANALYZE once.
 
         Decided semantics: regular single columns stay at their pinned target
@@ -354,10 +356,10 @@ class PostgresBackend(Backend):
         ``ALTER STATISTICS ... SET STATISTICS``. We do NOT raise the global
         ``default_statistics_target`` to the extended target (that would also
         resample every single column and couple single-col statistics to the
-        capacity axis).
+        sampling axis).
         """
         tables = sorted({obj.table for obj in objs})
-        target = self._native_target(capacity)
+        target = self._native_target(sampling_level)
         for tbl in tables:
             self._ensure_single_columns_pinned(tbl)
         with self.conn.cursor() as cur:
@@ -471,7 +473,7 @@ class PostgresBackend(Backend):
             out.append(
                 StatObject(
                     table=table, columns=cols, capability=_CAPABILITIES[2],
-                    capacity=Capacity(0), name=name,
+                    sampling_level=SamplingLevel(0), name=name,
                 )
             )
         return out
@@ -514,14 +516,14 @@ class PostgresBackend(Backend):
                 # 1) drop newly-created keep stats (cleanup)
                 for nm in new_names:
                     dummy = StatObject(table=table, columns=(), capability=_CAPABILITIES[2],
-                                       capacity=Capacity(0), name=nm)
+                                       sampling_level=SamplingLevel(0), name=nm)
                     self.drop_stat(dummy)
                 # 2) rebuild originally-present stats that we dropped
                 for s in dropped:
                     self.create_stat(s)
                 if dropped:
-                    max_cap = max((s.capacity for s in dropped),
-                                  key=lambda c: c.level, default=Capacity(0))
+                    max_cap = max((s.sampling_level for s in dropped),
+                                  key=lambda c: c.level, default=SamplingLevel(0))
                     self.build_stats(dropped, max_cap)
         return _ctx()
 
@@ -634,12 +636,12 @@ class PostgresBackend(Backend):
 
         Small relative to the shared fixed scan; scales with target and arity.
         """
-        t = self._native_target(obj.capacity)
+        t = self._native_target(obj.sampling_level)
         arity_f = 1.0 + 0.1 * max(len(obj.columns) - 2, 0)
         return float(self._VAR_PER_STAT_T1000 * (t / 1000.0) * arity_f)
 
     def sample_rows_per_level(self, table: str, level: int) -> Optional[float]:
-        """Expected ANALYZE sample rows at a capacity tier (targrows semantics).
+        """Expected ANALYZE sample rows at a sampling tier (targrows semantics).
 
         With single columns pinned to ``_SINGLE_COL_STATISTICS_TARGET`` (=100),
         ANALYZE scans ``targrows = max(300*100, 300*target)`` (the single-col

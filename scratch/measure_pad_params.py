@@ -44,7 +44,7 @@ import json
 from pathlib import Path
 
 from extstats2.backend.base import StatObject
-from extstats2.backend.capabilities import Capacity
+from extstats2.backend.capabilities import SamplingLevel
 from extstats2.config import DBConfig, get_backend
 from extstats2.core.measure_io import read_meta, write_meta
 
@@ -124,7 +124,7 @@ def main() -> None:
                 name = (f"pad_{table.rpartition('.')[2]}_{cols_l}_l{lv}p{pp}")
                 o = StatObject(table=table, columns=tuple(sorted(cols)),
                                capability=mcv,
-                               capacity=Capacity(int(lv), label=f"L{lv}"),
+                               sampling_level=SamplingLevel(int(lv), label=f"L{lv}"),
                                name=name)
                 be.create_stat(o)
                 objs.append((cols, o, pp))

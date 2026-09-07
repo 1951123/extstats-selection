@@ -41,7 +41,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
-from .capabilities import Capability, Capacity
+from .capabilities import Capability, SamplingLevel
 
 
 # ---------------------------------------------------------------------------
@@ -52,29 +52,31 @@ from .capabilities import Capability, Capacity
 class StatObject:
     """A concrete statistical object to create / measure / drop.
 
-    This abstracts away "a statistic on (table, columns) at some capacity":
+    This abstracts away "a statistic on (table, columns) built under a sampling
+    level":
 
-    - PostgreSQL: a ``CREATE STATISTICS`` object named ``name``; capacity is a
-      ``statistics_target``.
+    - PostgreSQL: a ``CREATE STATISTICS`` object named ``name``; the sampling
+      level maps to a ``statistics_target``.
     - Oracle: a column group / extended statistic (possibly a hidden column);
-      capacity is an ``estimate_percent`` / bucket count.
+      the sampling level maps to an ``estimate_percent``.
 
     ``name`` is a backend-generated, writable identifier used in both DDL and
-    catalog queries. ``capability`` and ``capacity`` are core concepts the
-    backend maps to native parameters.
+    catalog queries. ``capability`` and ``sampling_level`` are core concepts the
+    backend maps to native parameters (``sampling_level`` = the S-grid level the
+    object was measured / would be restored under).
     """
 
     table: str                       # qualified table name (backend-specific form)
     columns: tuple[str, ...]         # ordered column set (canonical order)
     capability: Capability           # which capability this object implements
-    capacity: Capacity               # abstract capacity level
+    sampling_level: SamplingLevel    # S-grid sampling level the object is under
     name: str = ""                   # backend-generated identifier
 
     @property
     def key(self) -> str:
         """Deterministic dedup key (backend-agnostic) for grouping/physical
         identity across queries (a shared physical statistic is paid once)."""
-        return f"{self.table}|{','.join(self.columns)}|{self.capability.name}|{self.capacity.level}"
+        return f"{self.table}|{','.join(self.columns)}|{self.capability.name}|{self.sampling_level.level}"
 
 
 @dataclass(frozen=True)
@@ -151,9 +153,9 @@ class StructuralProps:
     # Maintenance cost structure (MaintStructure.*).  Determines how the
     # maintenance budget constraint is instanced (per-statistic vs table-fixed).
     maint_structure: str = MaintStructure.FIXED_VAR
-    # Capacity model: "per_stat" (e.g. PG statistics_target per object) or
+    # SamplingLevel model: "per_stat" (e.g. PG statistics_target per object) or
     # "per_scan" (e.g. Oracle estimate_percent per GATHER). Determines how the
-    # capacity ladder drives storage/maintenance costs.
+    # sampling ladder drives storage/maintenance costs.
     capacity_model: str = "per_stat"
     # Objective aggregations for which this backend can provide a *trustworthy*
     # estimate.  Subset of {"mean","geomean","worst","p90"}.
@@ -204,19 +206,19 @@ class Backend(ABC):
         """Drop the statistic object."""
 
     @abstractmethod
-    def build_stats(self, objs: list[StatObject], capacity: Capacity) -> None:
-        """Build (ANALYZE / GATHER) the given objects at ``capacity``.
+    def build_stats(self, objs: list[StatObject], sampling_level: SamplingLevel) -> None:
+        """Build (ANALYZE / GATHER) the given objects under sampling ``sampling_level``.
 
         In PG this also rebuilds the single-column stats; the backend owns that
-        detail. Called with the session capacity already set by the caller where
-        relevant (see :meth:`set_capacity`).
+        detail. Called with the session sampling level already set by the caller
+        where relevant (see :meth:`set_sampling_level`).
         """
 
-    # -- capacity ----------------------------------------------------------
+    # -- sampling level session knob -------------------------------------
 
     @abstractmethod
-    def set_capacity(self, capacity: Capacity) -> None:
-        """Set the session/global 'how much' knob to ``capacity``.
+    def set_sampling_level(self, sampling_level: SamplingLevel) -> None:
+        """Set the session/global 'how much to sample' knob to ``sampling_level``.
 
         PG: ``SET default_statistics_target = <level>`` (or per-object
         ``ALTER STATISTICS ... SET STATISTICS``). Oracle: nothing global — the
@@ -251,7 +253,7 @@ class Backend(ABC):
     def table_maintain_tiers(self, table: str) -> tuple[float, ...]:
         """Fixed ANALYZE/GATHER cost ladder for one deployed refresh of ``table``.
 
-        Returns a tuple indexed by *target tier* (the abstract capacity level):
+        Returns a tuple indexed by *target tier* (the abstract sampling level):
         ``base[k]`` = one-refresh fixed cost when the highest target level
         selected on ``table`` is `k`.  This is the *per-table* fixed cost shared
         across all statistics on the table (the sampling scan is paid once per
@@ -363,16 +365,17 @@ class Backend(ABC):
         per-level baseline ``e^0(S_level)``; a candidate object added at
         ``param ≤ S_level/300`` shares this established deep scan (free-rider).
         Backends must override to actually realize the depth; the default only
-        sets the abstract capacity and is not physically meaningful.
+        sets the abstract sampling level and is not physically meaningful.
         """
-        self.set_capacity(Capacity(level))
+        self.set_sampling_level(SamplingLevel(level))
 
     def build_stat_param(self, obj: StatObject, param: Any) -> None:
         """Build a single extended statistic ``obj`` at an explicit representation
-        ``param``, in the current (λ) state whose shared scan depth is set by the
-        single columns. This decouples the object's param from any capacity-level
-        mapping. Backends override; default falls back to a normal build."""
-        self.build_stats([obj], obj.capacity)
+        ``param``, in the current sampling state whose shared scan depth is set
+        by the single columns. This decouples the object's param from the
+        sampling-level mapping. Backends override; default falls back to a
+        normal build."""
+        self.build_stats([obj], obj.sampling_level)
 
     def build_stat_params_batch(self, objs_params: list[tuple[StatObject, int]]) -> None:
         """Protocol-M batch: build several objects at their OWN params, de-

@@ -12,7 +12,7 @@ created through ``DBMS_STATS``:
   it repairs selection-cardinality q-error.
 - Column groups share a single ``GATHER`` scan of the table, so maintenance
   cost is a *fixed per-table* term (FIXED_ONLY) driven by the sampling knob
-  ``estimate_percent`` (the "per_scan" capacity model).  There is no
+  ``estimate_percent`` (the "per_scan" cost model).  There is no
   meaningful *per-statistic* marginal scan cost.
 - Cardinality is read from ``EXPLAIN PLAN`` + ``plan_table`` (the rewritten
   ``SELECT *`` yields its filtered row count at the root node).
@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 from .base import Backend, Estimate, IsolationCtx, MaintStructure, StatObject, StructuralProps
-from ..backend.capabilities import Capability, Capacity
+from ..backend.capabilities import Capability, SamplingLevel
 from ..config import DBConfig
 from ..core.queries import BenchQuery
 
@@ -99,8 +99,8 @@ _CAPABILITIES = [
 #   30000 <= N < 300000  -> L0=30000 partial / L1=full N    ({30000, full})
 #   N >= 300000          -> L0=30000 / L1=300000            ({30000, 300000})
 # Column groups share one GATHER scan; the sampling knob (estimate_percent) is
-# the per-scan capacity. The former fixed-% ladder (1/10/100) is dropped.
-DEFAULT_CAPACITY_LADDER = {
+# the per-scan sampling depth. The former fixed-% ladder (1/10/100) is dropped.
+DEFAULT_SAMPLING_LADDER = {
     0: {"s_rows": 30000, "buckets": 254},
     1: {"s_rows": 300000, "buckets": 254},
 }
@@ -134,9 +134,9 @@ class OracleBackend(Backend):
     """
 
     def __init__(self, cfg: Optional[DBConfig] = None,
-                 capacity_ladder: Optional[dict[int, dict]] = None):
+                 sampling_ladder: Optional[dict[int, dict]] = None):
         self._cfg = cfg or DBConfig.from_env()
-        self._ladder = dict(capacity_ladder or DEFAULT_CAPACITY_LADDER)
+        self._ladder = dict(sampling_ladder or DEFAULT_SAMPLING_LADDER)
         self._conn = None
         self._owner: Optional[str] = None
 
@@ -187,17 +187,18 @@ class OracleBackend(Backend):
         cols = self._q_cols(columns)
         return "(" + ",".join('"%s"' % c for c in cols) + ")"
 
-    def _native(self, capacity: Capacity) -> tuple[float, int]:
+    def _native(self, sampling_level: SamplingLevel) -> tuple[float, int]:
         """Convenience: realized ``(estimate_percent, buckets)`` for an abstract
-        capacity *without a table* — falls back to treating the level as a full
-        scan (100%). Prefer :meth:`_percent_for` when the table is known."""
-        return self._percent_for(None, capacity.level), self._buckets(capacity.level)
+        sampling level *without a table* — falls back to treating the level as a
+        full scan (100%). Prefer :meth:`_percent_for` when the table is known."""
+        return (self._percent_for(None, sampling_level.level),
+                self._buckets(sampling_level.level))
 
     def _s_rows_target(self, level: int) -> float:
         """The S_rows (sample-rows) target of sampling level ``level`` from the
         S-grid."""
         if level not in self._ladder:
-            raise KeyError(f"capacity level {level!r} not in ladder "
+            raise KeyError(f"sampling level {level!r} not in ladder "
                            f"{list(self._ladder)}")
         params = self._ladder[level]
         if "s_rows" in params:
@@ -238,7 +239,7 @@ class OracleBackend(Backend):
         # (data-driven, validated for PG); defaults kept permissive so the
         # sparse-linear class is reachable, pending M4 end-to-end validation.
         # Column groups share one GATHER scan -> FIXED_ONLY maintenance;
-        # capacity is per-scan (estimate_percent).
+        # sampling depth is per-scan (estimate_percent).
         return StructuralProps(
             sparse_one_stat=True,
             disjoint_supported=True,
@@ -247,9 +248,9 @@ class OracleBackend(Backend):
             supports_objectives=("mean",),
         )
 
-    # -- capacity ----------------------------------------------------------
+    # -- sampling level (S-grid) session knob ----------------------------
 
-    def set_capacity(self, capacity: Capacity) -> None:
+    def set_sampling_level(self, sampling_level: SamplingLevel) -> None:
         # Oracle has no global 'how much' knob; estimate_percent is passed to
         # build_stats. No-op is fine here.
         return
@@ -277,8 +278,8 @@ class OracleBackend(Backend):
             except Exception:
                 return  # not present is fine
 
-    def build_stats(self, objs: list[StatObject], capacity: Capacity) -> None:
-        """Gather each distinct base table once, at ``capacity``'s sampling.
+    def build_stats(self, objs: list[StatObject], sampling_level: SamplingLevel) -> None:
+        """Gather each distinct base table once, under ``sampling_level``'s depth.
 
         One ``GATHER_TABLE_STATS`` per table builds *all* requested column
         groups in a single scan (FIXED_ONLY / per-scan semantics). The groups
@@ -293,8 +294,8 @@ class OracleBackend(Backend):
             tname = self._q_table(table)
             # S-grid: the sampling depth is the S_rows target realizing min(S,N)
             # rows on *this* table, so estimate_percent is per-table.
-            ep = self._percent_for(table, capacity.level)
-            buckets = self._buckets(capacity.level)
+            ep = self._percent_for(table, sampling_level.level)
+            buckets = self._buckets(sampling_level.level)
             # Keep the engine's natural per-column statistics (SIZE AUTO builds
             # histograms for skewed columns) and add a histogram only on the
             # requested column groups. This matches how a real deployment would
@@ -354,7 +355,7 @@ class OracleBackend(Backend):
 
     # Oracle's representation grid: a SINGLE engine-faithful operating point,
     # NOT a PG-style multi-point ``attstattarget`` menu. Unlike PostgreSQL,
-    # Oracle exposes no per-object capacity knob comparable to
+    # Oracle exposes no per-object representation knob comparable to
     # ``statistics_target``: histogram resolution is decided by the engine
     # itself (``SIZE AUTO`` / converged-to-natural buckets), and ``SIZE`` only
     # upper-bounds that. We verified (2026-09-05, Census L0) that requesting
@@ -412,7 +413,7 @@ class OracleBackend(Backend):
         """Build one column group at an explicit ``param`` buckets, at the current
         λ's realized estimate_percent for the object's table (S-grid scan depth).
         Decouples the object's bucket count from the level ladder."""
-        ep = self._percent_for(obj.table, obj.capacity.level)  # this λ's scan %
+        ep = self._percent_for(obj.table, obj.sampling_level.level)  # this λ's scan %
         group = "(" + ",".join(self._q_cols(obj.columns)) + ")"
         mo = (f"FOR ALL COLUMNS SIZE AUTO FOR COLUMNS {group} SIZE {int(param)}")
         tname = self._q_table(obj.table)
@@ -503,7 +504,7 @@ class OracleBackend(Backend):
             ext_name = _text(ext_name)
             cols = tuple(_parse_extension_expression(expression))
             out.append(StatObject(table=table, columns=cols, capability=mcv,
-                                  capacity=Capacity(0),
+                                  sampling_level=SamplingLevel(0),
                                   name=ext_name or _text(expression)))
         return out
 
@@ -544,13 +545,13 @@ class OracleBackend(Backend):
                     self.drop_expression(tname, expression)
                     dropped.append(StatObject(table=tname,
                                               columns=cols, capability=mcv,
-                                              capacity=Capacity(0)))
+                                              sampling_level=SamplingLevel(0)))
             # 2) add any keep group not already live so it is active to measure.
             added_sets: set[tuple[str, ...]] = set()
             for k in keep:
                 ks = _colset(k)
                 if k.columns and ks not in originally_present:
-                    self.build_stats([k], k.capacity)
+                    self.build_stats([k], k.sampling_level)
                     added_sets.add(ks)
             try:
                 yield
@@ -563,7 +564,7 @@ class OracleBackend(Backend):
                 # restore the originally-present groups we dropped
                 for st in dropped:
                     if not self._present(st):
-                        self.build_stats([st], st.capacity)
+                        self.build_stats([st], st.sampling_level)
 
         return _ctx()
 
@@ -609,7 +610,7 @@ class OracleBackend(Backend):
         return _VAR_PER_STAT_S
 
     def sample_rows_per_level(self, table: str, level: int) -> Optional[float]:
-        """Expected SAMPLE rows at an S-grid capacity tier on ``table``.
+        """Expected SAMPLE rows at an S-grid tier on ``table``.
 
         = ``min(S_target, N)``: the S_rows target (30000 / 300000) saturated at
         the table's row count N — mirrors PostgreSQL's ``S=min(300*target,N)``,

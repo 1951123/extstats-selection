@@ -57,7 +57,7 @@ def build_and_solve(level: str, budget: int, disjoint: bool = False):
 def go(level: str, budget: int, db: str, table: str, limit: int, disjoint: bool, out: Path) -> None:
     from extstats2.config import DBConfig, get_backend
     from extstats2.backend.base import StatObject
-    from extstats2.backend.capabilities import Capacity
+    from extstats2.backend.capabilities import SamplingLevel
 
     blocks, res, phys, qbases = build_and_solve(level, budget, disjoint=disjoint)
     # per-query predicted values (= build_inner's qid order = blocks insertion order)
@@ -82,7 +82,7 @@ def go(level: str, budget: int, db: str, table: str, limit: int, disjoint: bool,
         cols_t = "_".join(c.lower() for c in ps.columns)
         name = f"e2e_{level}_{cols_t}_p{ps.level}"
         obj = StatObject(table=table, columns=tuple(ps.columns),
-                         capability=cap_obj, capacity=Capacity(ps.level, "e2e"),
+                         capability=cap_obj, sampling_level=SamplingLevel(int(level), "e2e"),
                          name=name)
         be.create_stat(obj)
         objs_params.append((obj, ps.level))

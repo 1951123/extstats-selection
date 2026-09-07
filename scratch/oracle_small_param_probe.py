@@ -10,7 +10,7 @@ L1 where raising SIZE stops buying precision (elbow) and whether [2..10] misses 
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 from extstats2.backend.base import StatObject
-from extstats2.backend.capabilities import Capacity
+from extstats2.backend.capabilities import SamplingLevel
 from extstats2.backend.oracle import _text, _parse_extension_expression
 
 OR = DBConfig(host="localhost", port=1521, user="SYSTEM",
@@ -42,7 +42,7 @@ LV = 1  # user convention: quick Oracle experiments use L1 (~2 s/gather)
 
 def gather(size):
     obj = StatObject(table=".climate", columns=list(COLS), capability=mcv,
-                     capacity=Capacity(LV), name=f"small_{size}")
+                     sampling_level=SamplingLevel(LV), name=f"small_{size}")
     be.create_stat(obj)
     try:
         be.build_stat_param(obj, size)

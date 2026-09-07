@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from extstats2.backend.base import StatObject
-from extstats2.backend.capabilities import Capability, Capacity
+from extstats2.backend.capabilities import Capability, SamplingLevel
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 
@@ -58,10 +58,10 @@ def test_estimate_census_query(backend):
 def test_create_size_drop_roundtrip(backend):
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     obj = StatObject(table=".climate", columns=("iAvail", "iClass"),
-                     capability=mcv, capacity=Capacity(0),
+                     capability=mcv, sampling_level=SamplingLevel(0),
                      name="ext_m_test_roundtrip")
     backend.create_stat(obj)
-    backend.build_stats([obj], Capacity(0))
+    backend.build_stats([obj], SamplingLevel(0))
     size = backend.stat_size_bytes(obj)
     assert size > 0
     backend.drop_stat(obj)
@@ -78,7 +78,7 @@ def test_table_maintain_tiers_monotonic(backend):
         StatObject(table=".climate", columns=("a", "b"),
                    capability=[c for c in backend.supported_capabilities()
                                if c.name == "mcv"][0],
-                   capacity=Capacity(1))) > 0
+                   sampling_level=SamplingLevel(1))) > 0
 
 
 @_NEED_PG
@@ -95,18 +95,18 @@ def test_table_maintain_tiers_match_model(backend):
 
 
 @_NEED_PG
-def test_capacity_ladder_mapping(backend):
+def test_sampling_ladder_mapping(backend):
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     # S-grid ladder: L0->100 (S=30k), L1->1000 (S=300k); L2 (10000) dropped.
     for lvl, expected in [(0, 100), (1, 1000)]:
         obj = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
-                         capacity=Capacity(lvl))
-        assert backend._native_target(obj.capacity) == expected
+                         sampling_level=SamplingLevel(lvl))
+        assert backend._native_target(obj.sampling_level) == expected
     # level outside the S-grid must raise (not silently build off-ladder)
     obj = StatObject(table=".climate", columns=("a", "b"), capability=mcv,
-                     capacity=Capacity(2))
+                     sampling_level=SamplingLevel(2))
     with pytest.raises(KeyError):
-        backend._native_target(obj.capacity)
+        backend._native_target(obj.sampling_level)
 
 
 @_NEED_PG
@@ -120,10 +120,10 @@ def test_single_col_pin_and_sample_floor(backend):
     """
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     obj = StatObject(table=".climate", columns=("iAvail", "iClass"),
-                     capability=mcv, capacity=Capacity(1),  # S-grid L1, target 1000
+                     capability=mcv, sampling_level=SamplingLevel(1),  # S-grid L1, target 1000
                      name="ext_m_pin_test")
     backend.create_stat(obj)
-    backend.build_stats([obj], Capacity(1))
+    backend.build_stats([obj], SamplingLevel(1))
     try:
         # (a) regular single column stays pinned at 100 even after a 10000 build
         with backend.conn.cursor() as cur:

@@ -37,7 +37,7 @@ def main(level, budget, db, table_for_meta, out, strategy="naive"):
     from extstats2.core.optimize_sgrid import load_sgrid_problem, build_inner_at_level
     from extstats2.core.optimize import solve_ilp, OptimizerClass
     from extstats2.backend.base import StatObject
-    from extstats2.backend.capabilities import Capacity
+    from extstats2.backend.capabilities import SAMPLING_NONE
     corpus = ROOT / "results" / "measure" / "stats_ceb_single" / "postgres"
     meta, blocks = load_sgrid_problem(ROOT/"results"/"measure", "stats_ceb_single", "postgres")
     phys, opts, qbases = build_inner_at_level(blocks, str(level), skip_worse_than_baseline=True)
@@ -128,7 +128,7 @@ def main(level, budget, db, table_for_meta, out, strategy="naive"):
         for i,(cs,p) in enumerate(items):
             nm=f"e2e_{i}_{'_'.join(sorted(cs)).lower()}_p{p}"
             st=StatObject(table=tab, columns=tuple(cs), capability=cap_mcv,
-                          capacity=Capacity(p,'mcv'), name=nm)
+                          sampling_level=SAMPLING_NONE, name=nm)
             be.create_stat(st)
             objs.append((st,p))
         for st,p in objs:

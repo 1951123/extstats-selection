@@ -39,7 +39,7 @@ import json
 from pathlib import Path
 
 from extstats2.backend.oracle import OracleBackend
-from extstats2.backend.capabilities import Capability, Capacity
+from extstats2.backend.capabilities import Capability, SamplingLevel
 from extstats2.backend.base import StatObject
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig
@@ -110,7 +110,7 @@ def main() -> None:
             def _obj(cols):
                 return StatObject(table=".climate", columns=cols,
                                   capability=mcv,
-                                  capacity=Capacity(lvl, label=f"L{lvl}"),
+                                  sampling_level=SamplingLevel(lvl, label=f"L{lvl}"),
                                   name="k2_" + "_".join(cols))
 
             def _measure_keep(keep):

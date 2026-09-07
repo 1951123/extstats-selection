@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from extstats2.backend.base import StatObject
-from extstats2.backend.capabilities import Capability, Capacity
+from extstats2.backend.capabilities import Capability, SamplingLevel
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 
@@ -85,8 +85,8 @@ def test_mcv_dominant_pair_cuts_qerror_no_leftover(backend):
     # 45-row sparse target still gets enough histogram mass to be repaired).
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     obj = StatObject(table=".climate", columns=cols, capability=mcv,
-                     capacity=Capacity(1), name="ext_m_dom_l1")
-    backend.build_stats([obj], Capacity(1))
+                     sampling_level=SamplingLevel(1), name="ext_m_dom_l1")
+    backend.build_stats([obj], SamplingLevel(1))
     after = backend.estimate(q).qerror
     assert after < base * 0.1, (
         f"dominant pair must materially cut q-error on a sparse correlated "
@@ -101,8 +101,8 @@ def test_create_build_drop_roundtrip(backend):
     """Gather is what materialises a group; drop removes it (cleanup)."""
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     obj = StatObject(table=".climate", columns=("iAvail", "iClass"),
-                     capability=mcv, capacity=Capacity(0))
-    backend.build_stats([obj], Capacity(0))
+                     capability=mcv, sampling_level=SamplingLevel(0))
+    backend.build_stats([obj], SamplingLevel(0))
     # group must now be visible in the catalog
     assert any(s.columns == ("IAVAIL", "ICLASS") for s in backend.list_stats(".climate"))
     size = backend.stat_size_bytes(obj)
@@ -125,7 +125,7 @@ def test_maint_tiers_monotonic(backend):
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     assert backend.stat_maintain_var(
         StatObject(table=".climate", columns=("a", "b"),
-                   capability=mcv, capacity=Capacity(1))) >= 0.0
+                   capability=mcv, sampling_level=SamplingLevel(1))) >= 0.0
 
 
 @_NEED_OR
@@ -148,8 +148,8 @@ def test_ceb_posts_query_transpiles_and_cleans_up(backend):
     cols = tuple(cands[0].columns)
     mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
     obj = StatObject(table=".posts", columns=cols, capability=mcv,
-                     capacity=Capacity(0))
-    backend.build_stats([obj], Capacity(0))
+                     sampling_level=SamplingLevel(0))
+    backend.build_stats([obj], SamplingLevel(0))
     backend.drop_stat(obj)
     assert backend.list_stats(".posts") == []
 

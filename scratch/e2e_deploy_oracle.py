@@ -64,7 +64,7 @@ def main() -> None:
     from extstats2.core.optimize import solve_ilp, OptimizerClass
     from extstats2.config import DBConfig, get_backend
     from extstats2.backend.base import StatObject
-    from extstats2.backend.capabilities import Capacity
+    from extstats2.backend.capabilities import SamplingLevel
 
     # ---- 1) build + solve over the existing Oracle-measured corpus ----------
     meta, blocks = load_sgrid_problem(CORPUS, WORKLOAD, BACKEND)

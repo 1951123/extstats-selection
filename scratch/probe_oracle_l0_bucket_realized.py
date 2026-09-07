@@ -16,7 +16,7 @@ import sys, re
 sys.path.insert(0, "src")
 from extstats2.config import DBConfig, get_backend
 from extstats2.backend.base import StatObject
-from extstats2.backend.capabilities import Capacity
+from extstats2.backend.capabilities import SamplingLevel
 from extstats2.backend.oracle import _text, _parse_extension_expression
 
 OR = DBConfig(host="localhost", port=1521, user="SYSTEM",
@@ -32,7 +32,7 @@ PAIRS = [
 
 def realized(cols, size):
     o = StatObject(table=".climate", columns=cols, capability=None,
-                   capacity=Capacity(0), name=f"b_{size}")
+                   sampling_level=SamplingLevel(0), name=f"b_{size}")
     # build at L0 1% sample with explicit SIZE
     be.build_stat_param(o, size)
     tq = be._q_table(".climate")

@@ -16,7 +16,7 @@ saturates.
 from extstats2.bench import load_benchmark
 from extstats2.config import DBConfig, get_backend
 from extstats2.backend.base import StatObject
-from extstats2.backend.capabilities import Capacity
+from extstats2.backend.capabilities import SamplingLevel
 from extstats2.backend.oracle import _text, _parse_extension_expression
 
 OR = DBConfig(host="localhost", port=1521, user="SYSTEM",
@@ -59,7 +59,7 @@ print(f"{'SIZE p':>7} {'realized_buckets':>17} {'estimate':>10} {'qerr':>8}")
 be.enter_sampling_state(".climate", 2)
 for p in params:
     obj = StatObject(table=".climate", columns=list(cols), capability=mcv,
-                     capacity=Capacity(2), name=f"probe_l2_{p}")
+                     sampling_level=SamplingLevel(2), name=f"probe_l2_{p}")
     be.create_stat(obj)
     try:
         be.build_stat_param(obj, p)

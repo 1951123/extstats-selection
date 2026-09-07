@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from ..backend.base import Backend, StatObject
-from ..backend.capabilities import Capacity
+from ..backend.capabilities import SamplingLevel
 from ..backend.postgres import PostgresBackend
 from .maint_model import MaintParams, write_maint
 
@@ -94,7 +94,7 @@ def _probe_stats_for_table(backend: Backend, table: str, level: int,
     for idx, (c0, c1) in enumerate(pairs):
         objs.append(StatObject(
             table=table, columns=(c0, c1), capability=mcv,
-            capacity=Capacity(level, label=f"L{level}-maint"),
+            sampling_level=SamplingLevel(level, label=f"L{level}-maint"),
             name=f"__ext_maint_{_table_sql(table)}_{level}_{idx}"))
     return objs
 

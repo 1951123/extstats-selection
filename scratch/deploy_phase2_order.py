@@ -34,7 +34,7 @@ def metrics(qs):
 def main(ord_json, db, table, level, out):
     from extstats2.config import DBConfig, get_backend
     from extstats2.backend.base import StatObject
-    from extstats2.backend.capabilities import Capacity
+    from extstats2.backend.capabilities import SamplingLevel
     from extstats2.bench import load_benchmark
 
     data=json.load(open(ord_json))
@@ -53,7 +53,7 @@ def main(ord_json, db, table, level, out):
         cols,param=parse_statkey(key)
         nm=f"ph2_{i}_{'_'.join(cols)}_p{param}"
         obj=StatObject(table=table, columns=cols, capability=cap,
-                      capacity=Capacity(param,"mcv"), name=nm)
+                      sampling_level=SamplingLevel(int(level), "mcv"), name=nm)
         be.create_stat(obj)
         created.append((obj,param))
     # set per-stat target then one shared ANALYZE

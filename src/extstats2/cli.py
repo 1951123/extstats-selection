@@ -45,8 +45,8 @@ def main(argv: list[str] | None = None) -> int:
         bench=args.bench,
         budget_bytes=args.budget_bytes,
         maint_budget=args.maint_budget,
-        # old "capacities" field now carries the canonical S-grid level indices
-        capacities=tuple(args.levels),
+        # S-grid sampling level indices to probe (canonical, see SAMPLING_LEVELS)
+        sampling_levels=tuple(args.levels),
     )
     if args.command == "check":
         backend = config.get_backend(cfg.backend)

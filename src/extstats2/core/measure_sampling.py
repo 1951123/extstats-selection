@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..backend.base import Backend, StatObject
-from ..backend.capabilities import Capacity
+from ..backend.capabilities import SamplingLevel
 from .candidates import CandidateSet
 from .measure_io import (SampleTier, Meta, result_dir, write_meta,
                                 write_query_measure)
@@ -129,7 +129,7 @@ def measure_query_sampling(
                 cols_t = "_".join(str(c).lower() for c in cand.columns)
                 name = f"ext_m_{table.rpartition('.')[2]}_{cols_t}_l{level}_{p}"
                 obj = StatObject(table=cand.table, columns=cand.columns,
-                                 capability=cap_obj, capacity=Capacity(level,
+                                 capability=cap_obj, sampling_level=SamplingLevel(level,
                                  label=f"L{level}-p{p}"),
                                  name=name)
                 backend.create_stat(obj)
@@ -225,7 +225,7 @@ def measure_query_sampling_m(
                 cols_t = "_".join(str(c).lower() for c in cand.columns)
                 name = f"ext_m_{table.rpartition('.')[2]}_{cols_t}_l{level}_{p}"
                 obj = StatObject(table=cand.table, columns=cand.columns,
-                                 capability=cap_obj, capacity=Capacity(level,
+                                 capability=cap_obj, sampling_level=SamplingLevel(level,
                                  label=f"L{level}-p{p}"),
                                  name=name)
                 backend.create_stat(obj)

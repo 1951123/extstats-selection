@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from ..backend.base import StatObject
-from ..backend.capabilities import Capacity
+from ..backend.capabilities import SamplingLevel
 from ..backend.oracle import OracleBackend
 from .maint_model import MaintParams, write_maint
 
