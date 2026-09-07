@@ -74,9 +74,11 @@ $$\min_{\text{可行解 } S}\, \text{workload-measure}(S).$$
   反例（部分坏尾需更高 arity/更多列，arity-2 + cap=1 修不动）。因此报告以**在该
   投影（引擎单 MV 语义 + arity-2 候选 + cap=1 部署）下的可达结果**为口径，而不把
   one-stat 当普适理论主张。
-- **`per_query_cap=1` 是精度档，可选。** 通用问题允许每 query 选 k≥0 个统计；
-  cap=1 只是默认的效率-精度折衷（目标线性化、保持稀疏可解）。后端/数据需要时可
-  放开到 K（目标非线性化，属独立工作）。
+- **`cap` = 1 或 >1 是"两 regime"的切分（由 optimizer class 承载,不是自由开关）。**
+  通用问题允许每 query 选 k≥0 个统计;但两个 regime 数学不同,故 API 各自锁死:
+  当 cap=1 时用 `SPARSE_LINEAR`（精确算术均值,`solve_ilp` 在入口强制
+  `per_query_cap==1`,否则 `ValueError`）;当 cap>1/None 时用 `MULTIPLICATIVE`（几何
+  surrogate）。不存在"把 sparse 允许 cap=K"这种中间态。
 - **cap>1 用 Option-A 语义：独立性要求同 query 内选中的列不重叠。** 乘性/几何
   surrogate（cap>1 或 None）是**独立性模型**——把"同一 query 用的统计"当作可加独立的
   前提是它们不共享列（§3 planner 干扰反例即为反对）。因此只要走乘性解码，就在
@@ -93,8 +95,10 @@ $$\min_{\text{可行解 } S}\, \text{workload-measure}(S).$$
   ——详情见 `deploy.md`。
 - **跨引擎统一是有条件的，由"结构性质契约"保证。** 不同引擎（PG 扩展统计 vs
   Oracle 列组）的统计机制不同，但可用"稀疏性/独立性"两个决定性维度把优化器归到
-  少数 MILP 类；成本结构与目标聚合是类内实例参数。不满足决定性契约的后端落到它
-  能支持的最强优化器类，而非被当作"同模型"硬跑。
+  少数 MILP 类。**目标聚合不是可选实例参数**，而是由类/档唯一决定：cap=1 →
+  sparse-linear（精确算术均值）、cap>1/None → multiplicative（几何均值 surrogate，
+  带 ≥1 的 floor）；`worst`/`p90`/`geo` 只是求解后的 **evaluation metrics**。不满足
+  决定性契约的后端落到它能支持的最强优化器类，而非被当作"同模型"硬跑。
 - **capacity 是"采样轴 λ × 表示轴 param"，二者关系引擎相关。** 采样多深（λ）
   是跨引擎的物理量；表示多细（param）绑后端对象形态（PG 的 `statistics_target`
   一维标量、受 Chaudhuri floor `S≥300·target` 限制；Oracle 的表示多为引擎自决的
