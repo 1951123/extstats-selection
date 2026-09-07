@@ -77,6 +77,16 @@ $$\min_{\text{可行解 } S}\, \text{workload-measure}(S).$$
 - **`per_query_cap=1` 是精度档，可选。** 通用问题允许每 query 选 k≥0 个统计；
   cap=1 只是默认的效率-精度折衷（目标线性化、保持稀疏可解）。后端/数据需要时可
   放开到 K（目标非线性化，属独立工作）。
+- **cap>1 用 Option-A 语义：独立性要求同 query 内选中的列不重叠。** 乘性/几何
+  surrogate（cap>1 或 None）是**独立性模型**——把"同一 query 用的统计"当作可加独立的
+  前提是它们不共享列（§3 planner 干扰反例即为反对）。因此只要走乘性解码，就在
+  **每一 query 上加列重叠互斥行**（即便显式给了 cap=K>1 也一并加），不靠 cap=1 兜底。
+- **乘性 surrogate 有下界 ≥1 的线性行（q-error 物理下界）。** 几何 surrogate
+  $\hat e_i=e_i^0\prod_s(e_{is}/e_i^0)^{x_{is}}$ 理论上可被多个强统计一起推到 <1，但那
+  是物理上不可能的 q-error；在幂对数空间里
+  $\sum_s \log(e_{is}/e_i^0)\,x_{is}\ge -\log e_i^0$ 是**每 query 一条线性行**，保证
+  solver 优化到的 surrogate ≥1，从而 solver objective 与最终 decode 一致（不在解后补
+  `max(·,1)`）。
 - **planner 干扰是独立性的反例，靠"排序"修复、且需 PG 专用。** 独立性的前提
   是选中统计列不重叠；但真实 planner 按 OID 顺序取第一个适用统计，重叠共存时会
   出现干扰。修复必须是**扩展层**（决定 CREATE 顺序的排序器），不能回写进通用模型

@@ -349,9 +349,12 @@ def test_y2_two_stats_same_table_pay_fixed_once():
                      maint_cost=1.0),   # var
     ]
     base = 10.0
+    # q=5 keeps the joint geometric surrogate feasible under the >=1 floor
+    # (two independent 10->5 stats would give 10*(5/10)^2 = 2.5 >= 1) while
+    # still letting both be selected on the SAME query to test fixed-once.
     opts = [
-        Option(stat_index=0, qerror=2.0, level=1, query="q1", cand="t(a,b)"),
-        Option(stat_index=1, qerror=2.0, level=1, query="q1", cand="t(c,d)"),
+        Option(stat_index=0, qerror=5.0, level=1, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=5.0, level=1, query="q1", cand="t(c,d)"),
     ]
     # The two non-overlapping stats can BOTH be chosen (per_query_cap=None),
     # so total = fixed(10.0 once) + var(1+1) = 12.0, NOT 2*(10+1)=22.
@@ -373,9 +376,10 @@ def test_y2_two_stats_different_tables_pay_two_fixed():
                      maint_cost=0.5),
     ]
     base = 10.0
+    # q=5 keeps both selections jointly feasible under the surrogate >=1 floor.
     opts = [
-        Option(stat_index=0, qerror=2.0, level=1, query="q1", cand="t1(a,b)"),
-        Option(stat_index=1, qerror=2.0, level=1, query="q1", cand="t2(c,d)"),
+        Option(stat_index=0, qerror=5.0, level=1, query="q1", cand="t1(a,b)"),
+        Option(stat_index=1, qerror=5.0, level=1, query="q1", cand="t2(c,d)"),
     ]
     res = solve_ilp(phys, [opts], [base], budget_bytes=200,
                     maint_budget=100.0, maint_profile=prof)
@@ -392,10 +396,11 @@ def test_y2_budget_binds_on_fixed_charge():
         PhysicalStat(table="t", columns=("e", "f"), level=1, cost=50, maint_cost=0.1),
     ]
     base = 10.0
+    # q=6 keeps three selections jointly feasible: 10*(6/10)^3 = 2.16 >= 1.
     opts = [
-        Option(stat_index=0, qerror=2.0, level=1, query="q1", cand="t(a,b)"),
-        Option(stat_index=1, qerror=2.0, level=1, query="q1", cand="t(c,d)"),
-        Option(stat_index=2, qerror=2.0, level=1, query="q1", cand="t(e,f)"),
+        Option(stat_index=0, qerror=6.0, level=1, query="q1", cand="t(a,b)"),
+        Option(stat_index=1, qerror=6.0, level=1, query="q1", cand="t(c,d)"),
+        Option(stat_index=2, qerror=6.0, level=1, query="q1", cand="t(e,f)"),
     ]
     # Allow ~2 var terms + 1 fixed: budget 10.5 -> can take several stats but
     # must stay within one table's fixed(10)+var; verify feasibility bound.

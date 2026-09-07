@@ -78,7 +78,8 @@ $$
 &\text{(maint,\ measured-linear)}\quad \sum_{t\in T_{\text{active}}} \Big[\,\mathrm{fixed}(t,\ell_t)+c_{\mathrm{var}}(t,\ell_t)\,n_t\,\Big] \le M_{\text{sec}};\\[1pt]
 &\qquad \ell_t=\max\{\ell_s\,:\,t_s=t,\ y_s=1\},\quad n_t=\#\{s\,:\,t_s=t,\ y_s=1\};\\[1pt]
 &\text{(select ⟸ created)}\quad x_{is}\le y_s,\ \ \forall\, i,\ s\in O_i;\\[1pt]
-&\text{(overlap-free 保独立性)}\quad x_{ia}+x_{ib}\le 1 \ \ \forall i,\ a\ne b\in O_i,\ C_a\cap C_b\ne\varnothing;\\[1pt]
+&\text{(overlap-free 保独立性, cap$\ge$1 亦施)}\quad x_{ia}+x_{ib}\le 1 \ \ \forall i,\ a\ne b\in O_i,\ C_a\cap C_b\ne\varnothing;\\[1pt]
+&\text{(surrogate 下界, 乘性档)}\quad \sum_{s\in O_i}\log\!\tfrac{e_{is}}{e_i^0}\,x_{is}\ \ge\ -\log e_i^0\ \ \Longleftrightarrow\ \prod_{s\in O_i}\big(e_{is}/e_i^0\big)^{x_{is}}\ge\tfrac1{e_i^0}\ \Leftrightarrow\ \hat e_i\ge 1;\\[1pt]
 &\text{(同列组至多一档)}\quad \sum_{\ell:\ (t_s,C_s,\ell)} y_{t_s,C_s,\ell}\le 1\ \ \forall (t_s,C_s);\\[1pt]
 &\text{(cap=1, 可选稀疏档)}\quad \sum_{s\in O_i} x_{is}\le1;\\[1pt]
 &y_s,x_{is}\in\{0,1\}.

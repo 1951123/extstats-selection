@@ -1,32 +1,52 @@
 """Phase-2 MILP: budgeted selection of (combo, capacity) options minimising
-average q-error.  **Direct, unchanged port of v1 ``optimize.py``** — this model
-is already fully backend-agnostic (it reasons only about column sets, per-level
-q-errors, and byte costs), so it carries straight into v2 unchanged.
+q-error.  Direct port of v1 ``optimize.py`` — this model is backend-agnostic.
 
-Model (multi-select, multiplicative approximation)
---------------------------------------------------
-A query may select ANY subset of its candidate statistics (powerset semantics).
-The joint effect is approximated multiplicatively in log space:
+Two objective semantics, selected by the MILP class / per-query cap:
+  * per_query_cap=1 + SPARSE_LINEAR  -> EXACT arithmetic mean (linear Δ objective);
+  * per_query_cap=K>1 / None + MULTIPLICATIVE -> geometric-mean surrogate
+    (log-space additive objective); see the Objective note below the model block.
+
+Model (multi-select, multiplicative approximation for cap>1)
+---------------------------------------------------------------
+For cap>1 a query may select several *non-overlapping* statistics.  The joint
+effect is approximated multiplicatively in log space:
 
     log e_i(T_i) ≈ log e_i^0 + sum_{s in T_i} log(e_is / e_i^0)
 
-To keep the approximation valid we forbid selecting column-overlapping statistics
-within a single query, so the terms are independent.
+To keep the independence / multiplicative approximation valid we forbid selecting
+column-overlapping statistics within a single query (Option A semantics — combine
+only independent, non-overlapping stats), and constrain each per-query surrogate
+product to stay >= 1.
 
 Variables (all binary):
   - y_s : create physical statistic s (table, columns, capacity)
   - x_is: query i selects statistic s
 
-Objective (minimise mean q-error):
-    const + sum_{i,s} w_is * x_is,   w_is = log(e_is/e_i^0) <= 0
+Objective — two well-separated semantics (never conflated):
+  * per_query_cap = 1  (SPARSE_LINEAR, exact):
+        min 1/n sum_i e_i   ==  max sum_{i,s} (e_i^0 - e_is) * x_is
+    Each query picks at most ONE stat, so e_i = e_i^0 - sum_s Δ_is x_is is
+    *exactly* linear (Δ_is = e_i^0 - e_is >= 0); minimising the arithmetic mean
+    is exactly maximising total linear improvement.  Exact formulation.
+  * per_query_cap = K>1 / None  (MULTIPLICATIVE, geometric surrogate):
+        min sum_i log \\hat e_i,   \\hat e_i = e_i^0 * prod_s (e_is/e_i^0)^{x_is}
+    The joint effect is a multiplicative composition; minimising its (log-space,
+    additive) surrogate is minimising the geometric mean of the surrogate q-error.
+    A query may select up to K (or arbitrarily many when None) *non-overlapping*
+    stats — Option A semantics: the multiplicative surrogate is an independence
+    model whose validity premise is that combined stats do not share columns
+    (see architecture.md §2/§3).  Each surrogate \\hat e_i is constrained >= 1
+    (a linear row per query), so the solver never optimises an impossible
+    below-1 product, keeping the solver objective identical to the final decode.
 
 Constraints:
   1) storage budget  : sum_s c_s * y_s <= C
   2) select created  : x_is <= y_s
   3) overlap-free    : within each query, column-overlapping stats can't both
-                       be chosen (keeps the multiplicative approximation valid)
-  4) level exclusivity: at most one capacity level per (table, columns)
-  5) (optional) global disjointness: no two created stats share a column
+                       be chosen (multiplicative/independence model, Option A)
+  4) surrogate floor : per query, log \\hat e_i >= 0 (i.e. \\hat e_i >= 1)
+  5) level exclusivity: at most one capacity level per (table, columns)
+  6) (optional) global disjointness: no two created stats share a column
 
 Because y_s is shared across queries (2) but paid once in the budget (1),
 multiple queries reusing a statistic pay its storage only once.
@@ -34,6 +54,7 @@ multiple queries reusing a statistic pay its storage only once.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -60,6 +81,13 @@ class OptimizerClass:
 OBJECTIVE_MEAN = "mean"
 OBJECTIVE_GEOMEAN = "geomean"
 OBJECTIVE_WORST = "worst"
+
+# Slack on the multiplicative surrogate-floor rows.  Set to 0 so a selection that
+# *exactly* reaches the q-error floor (surrogate == 1, e.g. one stat fully fixing
+# a query) is still feasible; the constraint sum_s w_is x_is >= -log(e_i^0) already
+# forbids any set that would push the geometric product below 1 (the solver keeps
+# the surrogate >=1 by construction, so its objective equals the final decode).
+_FLOOR_SLACK = 0.0
 
 
 @dataclass(frozen=True)
@@ -279,13 +307,22 @@ def solve_ilp(
         matching prior behaviour and preserving backward compatibility.
       - If neither is set, no maintenance constraint is added.
 
-    ``optimizer_class`` selects the MILP class (§1.9):
-      - ``OptimizerClass.MULTIPLICATIVE`` (default): log-space additive objective
-        via :meth:`Option.log_improvement` (the general fallback class).
-      - ``OptimizerClass.SPARSE_LINEAR``: exactly-linear objective via
-        :meth:`Option.linear_improvement` (requires ``per_query_cap`` semantic).
-    ``objective`` is an instance parameter (mean/geomean/worst); for the mean the
-    above objectives apply directly.  Defaults preserve backward compatibility.
+    ``optimizer_class`` selects the MILP class (§1.9) and therefore the objective
+    SEMANTICS (do not conflate):
+      - ``OptimizerClass.MULTIPLICATIVE`` (default, per_query_cap=None or K>1):
+        geometric-mean surrogate.  Objective = min sum_i log \\hat e_i with
+        \\hat e_i = e_i^0 * prod_s (e_is/e_i^0)^{x_is}; each surrogate is
+        constrained >= 1 (linear per-query floor row), so solver objective
+        equals the final decode and never optimises a below-1 product.  Combine
+        only non-overlapping stats (Option A, independence model).
+      - ``OptimizerClass.SPARSE_LINEAR`` (per_query_cap=1): EXACT arithmetic-mean
+        objective max sum_{i,s} (e_i^0 - e_is) x_is — one stat per query, so the
+        arithmetic mean is exactly linear.  Not a geometric/geomean objective.
+    ``objective`` (mean/geomean/worst/p90) is a *requested reporting aggregation
+    tag*; it is validated against the backend's ``supports_objectives`` but does
+    NOT change the surrogate/functional above (the MILP class decides mean-exact
+    vs geometric).  ``objective="geomean"`` is only meaningful together with
+    ``OptimizerClass.MULTIPLICATIVE``.  Defaults preserve backward compatibility.
     """
     n_stats = len(phys_stats)
     n_opt = sum(len(opts) for opts in queries_options)
@@ -302,6 +339,27 @@ def solve_ilp(
     # selected statistic whose level >= L.  `w_{t,0}` marks table activation.
     # Staircase fixed cost is charged as base0*w_{t,0} + Σ_{L>=1} Δ_L*w_{t,L}.
     use_profile = maint_profile is not None and bool(maint_profile.table_base_tiers)
+    if use_profile:
+        # Monotone fixed ladder is REQUIRED: reaching a higher level must never
+        # be cheaper than a lower one, otherwise `base[L]-base[L-1]` (the
+        # incremental maintenance charge of raising a table to tier L) would be
+        # negative and the staircase linearization would *reward* higher tiers.
+        # Refuse to build the MILP on a non-monotone profile.
+        for t, tiers in maint_profile.table_base_tiers.items():  # type: ignore[union-attr]
+            prev = None
+            for L, val in enumerate(tiers):
+                if prev is not None and val < prev - 1e-12:
+                    raise ValueError(
+                        f"MaintProfile fixed ladder for table {t!r} is not "
+                        f"monotonically non-decreasing: tier L{L-1}={prev!r} > "
+                        f"L{L}={val!r}. Higher levels must cost >= lower levels."
+                    )
+                prev = val
+
+    # Multiplicative(log-space) vs exact-(linear) objective. The former combines
+    # several non-overlapping stats per query via a geometric surrogate; the
+    # latter is the exact arithmetic case (cap=1, one stat per query).
+    multiplicative = optimizer_class != OptimizerClass.SPARSE_LINEAR
 
     # per-table set of levels among candidate physical statistics
     table_levels: dict[str, set[int]] = {}
@@ -341,13 +399,24 @@ def solve_ilp(
     n_combo = len(combo_groups)
     colset = [set(ps.columns) for ps in phys_stats]
 
-    if per_query_cap is not None:
-        n_extra = m + n_combo
-    else:
+    if multiplicative:
+        # Option A semantics (see module docstring / architecture §2-§3): a query
+        # may combine only *non-overlapping* stats.  Add overlap-free rows for the
+        # multiplicative decode (independent of whether an explicit cap is given),
+        # plus one per-query surrogate-floor row so every selected surrogate stays
+        # >= 1 (never optimised to an impossible below-1 geometric product).
+        need_overlap = True
         n_overlap = 0
         for opts in queries_options:
             n_overlap += len(list(_overlap_pairs(opts, phys_stats)))
-        n_extra = n_overlap + n_combo
+    else:
+        need_overlap = False
+        n_overlap = 0
+    # Explicit per-query cap (0/1/K) — when provided, emit a cap row per query.
+    need_cap = per_query_cap is not None
+    n_cap = m if need_cap else 0
+    n_floor = m if multiplicative else 0   # one surrogate-floor row per query
+    n_extra = n_cap + n_overlap + n_floor + n_combo
     if global_disjoint:
         n_disjoint = sum(
             1
@@ -378,6 +447,8 @@ def solve_ilp(
 
     A = lil_matrix((n_con, n_var))
     ub = np.full(n_con, np.inf)
+    lb = np.full(n_con, -np.inf)   # default: no lower bound (rows are <= / =), except
+                                   # the per-query surrogate-floor rows (>= below).
     nrow = 0
 
     # 1) storage budget
@@ -438,8 +509,8 @@ def solve_ilp(
             gi += 1
             nrow += 1
 
-    # 3a) per-query cap
-    if per_query_cap is not None:
+    # 3a) per-query cap (when an explicit cap 0/1/K is given)
+    if need_cap:
         gi = 0
         for opts in queries_options:
             for _ in opts:
@@ -447,8 +518,9 @@ def solve_ilp(
                 gi += 1
             ub[nrow] = float(per_query_cap)
             nrow += 1
-    # 3b) overlap-free within query
-    else:
+    # 3b) overlap-free within query (Option A, multiplicative / independence):
+    #     a query may never select two stats sharing a column, so at most one wins.
+    if need_overlap:
         gi = 0
         for opts in queries_options:
             for a, b in _overlap_pairs(opts, phys_stats):
@@ -456,6 +528,23 @@ def solve_ilp(
                 A[nrow, n_stats + gi + b] = 1.0
                 ub[nrow] = 1.0
                 nrow += 1
+            gi += len(opts)
+    # 3c) per-query surrogate floor (multiplicative only): keep every surrogate
+    #     q-error >= 1, so the solver never optimises an impossible below-1
+    #     geometric product.  In log space, w_is = log(e_is / e_i^0) (<=0) and
+    #         log \\hat e_i = log e_i^0 + sum_{s} w_is x_is >= 0   <=>  \\hat e_i >= 1
+    #         sum_s w_is x_is >= -log e_i^0   (a LINEAR row per query).
+    #     Empty selection always satisfies it (e_i^0 >= 1), so it only forbids
+    #     over-combining stats beyond the physical floor; the solver objective
+    #     therefore stays exactly equal to the final decode (no post-hoc clamp).
+    if multiplicative:
+        gi = 0
+        for b_i, opts in zip(qerror_base, queries_options):
+            # require: sum_s w_is x_is >= -log(b_i)  (surrogate >= 1)
+            lb[nrow] = -math.log(max(b_i, 1e-12)) + _FLOOR_SLACK
+            for j, o in enumerate(opts):
+                A[nrow, n_stats + gi + j] = o.log_improvement(b_i)
+            nrow += 1
             gi += len(opts)
 
     # 4) column-combo level exclusivity
@@ -475,7 +564,7 @@ def solve_ilp(
                     ub[nrow] = 1.0
                     nrow += 1
 
-    constraints = LinearConstraint(A.tocsr(), lb=np.full(n_con, -np.inf), ub=ub)
+    constraints = LinearConstraint(A.tocsr(), lb=lb, ub=ub)
     bounds = Bounds(lb=np.zeros(n_var), ub=np.ones(n_var))
 
     res = milp(c=c, integrality=integrality, bounds=bounds, constraints=constraints)
