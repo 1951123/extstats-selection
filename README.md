@@ -66,8 +66,16 @@ for the full design.
 
 ```bash
 pip install -e .[dev]
-python -m extstats2.cli check --backend postgres
+python -m extstats2.cli check --backend postgres   # config/backend/sampling sanity only
 ```
 
 The PostgreSQL backend requires a running PG 16 instance and a loaded benchmark
 (`benchmarks/init_*.sh`), mirroring v1's conventions.
+
+> **Note (canonical path).** The S-grid / λ-first research pipeline is driven from
+> `scratch/` — e.g. `measure_sgrid.py` (per-λ corpus into `results/measure/…`),
+> `fit_maint_postgres.py` / `fit_maint_oracle.py` (`_maint.json`), and
+> `measure_milp_curve.py` (budget×quality curves) — and the canonical library
+> entry points are re-exported from `extstats2.core`
+> (`measure_lambda*`, `optimize_lambda.inner_optimal_at_level`, `solve_ilp`).
+> `core.measure` / `eval/cross_*` are the LEGACY v1 / capacity-era path (see docs).

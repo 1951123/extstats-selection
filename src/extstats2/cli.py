@@ -1,16 +1,13 @@
-"""CLI entry point (LEGACY old-capacity scaffold; only `check` is wired).
+"""CLI entry point for the v2 toolkit (thin backend/config-check shell).
 
-This shell still models the old v1 pipeline (`generate -> measure -> optimize
--> verify`) and exposes `--capacities 0 1 2`; it is NOT the current S-grid /
-lambda-first pipeline CLI (the real experiment drivers live in scratch/, e.g.
-measure_sgrid.py).  Kept only as a thin backend/config validation shell.
+NOTE (legacy-cleaning batch-3): this is a *validation shell*, not the full
+pipeline CLI.  It models the backend selection & S-grid sampling configuration;
+the real S-grid / lambda-first experiment drivers live in scratch/
+(measure_sgrid.py, etc.).  The interface talks S-grid sampling LEVELS (L0=30k /
+L1=300k requested rows), NOT the old v1 three-level "capacity" abstraction.
 
-CLI entry point for the v2 toolkit (skeleton).
-
-Pipeline matches v1: ``generate -> measure -> optimize -> verify``, but every
-step is backend-agnostic via :func:`extstats2.config.get_backend`.
-The CLI wiring is intentionally thin; the staging is filled in as backends (M2/M3)
-land. For now it validates configuration and backend selection.
+The CLI wiring is intentionally thin; for now it validates configuration and
+backend selection.
 """
 
 from __future__ import annotations
@@ -31,16 +28,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget-bytes", type=int, default=0, help="storage budget (0=unlimited)")
     p.add_argument("--maint-budget", type=float, default=None,
                    help="maintenance budget for the ILP (None/0=unconstrained)")
-    p.add_argument("--objective", default="mean",
-                   choices=["mean"],
-                   help="evaluation metric shown (worst/p90/geomean are computed "
-                        "as derived reporting metrics, NOT selectable optimization "
-                        "objectives; the MILP objective is fixed by cap)")
-    p.add_argument("--capacities", type=int, nargs="+", default=[0, 1, 2],
-                   help="abstract capacity level indices to probe")
+    # S-grid sampling LEVELS (canonical): L0/L1 = requested rows 30k/300k.
+    # (The optimizer objective is fixed by cap; worst/p90/geomean are only eval.)
+    p.add_argument("--levels", type=int, nargs="+", default=[0, 1],
+                   choices=[0, 1],
+                   help="S-grid sampling levels to probe (0=30k rows, 1=300k rows)")
     p.add_argument("--protocol", choices=["a", "m", None], default=None)
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("check", help="validate config + backend selection")
+    sub.add_parser("check", help="validate backend selection + S-grid config")
     return p
 
 
@@ -51,22 +46,22 @@ def main(argv: list[str] | None = None) -> int:
         bench=args.bench,
         budget_bytes=args.budget_bytes,
         maint_budget=args.maint_budget,
-        objective=args.objective,
-        capacities=tuple(args.capacities),
+        # old "capacities" field now carries the canonical S-grid level indices
+        capacities=tuple(args.levels),
         protocol=args.protocol,
     )
     if args.command == "check":
         backend = config.get_backend(cfg.backend)
         props = backend.structural_props()
         opt_class = select_optimizer_class(props)
+        s_rows = {lv: config.sampling_requested_rows(lv) for lv in args.levels}
         print(f"backend      : {backend.name()}")
         print(f"capabilities : {[str(c) for c in backend.supported_capabilities()]}")
         print(f"protocol     : {backend.protocol(cfg.protocol)} (requested={cfg.protocol})")
         print(f"bench        : {cfg.bench}")
-        print(f"capacities   : {cfg.capacities}")
+        print(f"sampling L   : {args.levels} -> requested rows {s_rows} (S-grid)")
         print(f"budget_bytes : {cfg.budget_bytes}")
         print(f"maint_budget : {cfg.maint_budget}")
-        print(f"objective    : {cfg.objective}")
         print(f"optimizer    : {opt_class}")
         print(f"contract     : sparse={props.sparse_one_stat} "
               f"disjoint={props.disjoint_supported} "
