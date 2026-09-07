@@ -40,6 +40,15 @@ $\text{geo}$/$\max$ 则是在该选中集上算出的**派生报告指标**（�
 > worst/geomean 选择的 `objective` 参数）。`p90`/`worst`/`geo`(最大) 都只作为**求解后的
 > 派生评估指标**从 `qerror_per_query` 计算，绝不改变求解本身。
 
+> **乘性代理把它们组织为带 query-level 下界的 workload model（Option B）。** 对
+> `cap>1`，我们采用乘性 workload 代理
+> $$\hat e_i=b_i\exp\!\Big(\sum_{s}w_{is}x_{is}\Big),\qquad w_{is}=\log\frac{e_{is}}{e_i^0}\;\le0,$$
+> 并对每个 query 施加理论下界 $\hat e_i\ge1$ —— 在 log 空间里它是**每 query 一条线性行**
+> $\log b_i+\sum_s w_{is}x_{is}\ge0$（即 `§1.2` 的 surrogate 下界约束）。于是**MILP 的目标
+> （在 log 下最小化 surrogate）与求解后报告的 surrogate metric 完全一致**：solver 不会去
+> 优化一个可能 `<1` 的几何乘积，decode 也**不需要**求解后再 `max(·,1)` 补 clamp。它把
+> “$\hat e_i$ 只是代理、并非严格 q-error 恒等式”这句话写进模型而不是靠事后掩盖。
+
 ### 1.1 符号定义
 
 | 符号 | 含义 | 备注 |

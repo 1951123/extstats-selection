@@ -339,12 +339,13 @@ def solve_ilp(
     # Staircase fixed cost is charged as base0*w_{t,0} + Σ_{L>=1} Δ_L*w_{t,L}.
     use_profile = maint_profile is not None and bool(maint_profile.table_base_tiers)
     if use_profile:
-        # Monotone fixed ladder is REQUIRED: reaching a higher level must never
-        # be cheaper than a lower one, otherwise `base[L]-base[L-1]` (the
-        # incremental maintenance charge of raising a table to tier L) would be
-        # negative and the staircase linearization would *reward* higher tiers.
-        # Refuse to build the MILP on a non-monotone profile.
+        # Per-table fixed ladder preconditions.  We refuse to build the MILP on
+        # a malformed profile rather than silently mis-model it.
         for t, tiers in maint_profile.table_base_tiers.items():  # type: ignore[union-attr]
+            # 1) Monotone ladder REQUIRED: reaching a higher level must never be
+            #    cheaper than a lower one, else `base[L]-base[L-1]` (the staircase
+            #    incremental charge of raising a table to tier L) is negative and
+            #    rewards higher tiers.
             prev = None
             for L, val in enumerate(tiers):
                 if prev is not None and val < prev - 1e-12:
@@ -354,11 +355,37 @@ def solve_ilp(
                         f"L{L}={val!r}. Higher levels must cost >= lower levels."
                     )
                 prev = val
+            # 2) Candidate level coverage: if any candidate stat on this table can
+            #    reach a level beyond the provided ladder, the staircase would
+            #    silently skip that threshold (under-charging maintenance).  Error
+            #    loudly instead of building an under-modeled budget.
+            cand_max = max((ps.level for ps in phys_stats if ps.table == t),
+                           default=-1)
+            if cand_max >= len(tiers):
+                raise ValueError(
+                    f"MaintProfile fixed ladder for table {t!r} has "
+                    f"{len(tiers)} tier(s) (levels 0..{len(tiers)-1}) but a "
+                    f"candidate statistic reaches level {cand_max}; refusing to "
+                    f"under-model its maintenance. Extend the ladder to cover all "
+                    f"candidate levels."
+                )
 
     # Multiplicative(log-space) vs exact-(linear) objective. The former combines
     # several non-overlapping stats per query via a geometric surrogate; the
     # latter is the exact arithmetic case (cap=1, one stat per query).
     multiplicative = optimizer_class != OptimizerClass.SPARSE_LINEAR
+    # -- invariants on the MILP class / per-query cap ---------------------
+    # SPARSE_LINEAR decodes as e_i = e_i^0 - Σ_s Δ_is x_is, which is only exact
+    # when every query selects AT MOST ONE stat (cap==1).  Lock the contract in
+    # at the entry point so a stray caller can never pass cap=None and get an
+    # (invalid) unbounded sparse formulation with no cap and no overlap rows.
+    if optimizer_class == OptimizerClass.SPARSE_LINEAR and per_query_cap != 1:
+        raise ValueError(
+            f"OptimizerClass.SPARSE_LINEAR (exact arithmetic mean) requires "
+            f"per_query_cap == 1, got per_query_cap={per_query_cap!r}. Its linear "
+            f"decode e_i = e_i^0 - Σ_s Δ_is x_is is only exact under one-stat-per-"
+            f"query. Use MULTIPLICATIVE with cap>1/None for the geometric surrogate."
+        )
 
     # per-table set of levels among candidate physical statistics
     table_levels: dict[str, set[int]] = {}

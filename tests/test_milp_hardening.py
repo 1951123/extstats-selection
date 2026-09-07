@@ -152,3 +152,42 @@ def test_maintenance_monotone_ladder_ok():
                     maint_budget=200.0, maint_profile=prof)
     # fixed at tier 2 = 100.0 charged once, plus 1.0 var = 101.0
     assert res.total_maint == pytest.approx(101.0, abs=1e-6)
+
+
+def test_sparse_linear_requires_per_query_cap_one():
+    """P0-1 lock: OptimizerClass.SPARSE_LINEAR (exact arithmetic mean) is only
+    mathematically valid with per_query_cap == 1 (one stat per query). Passing
+    None (or any cap != 1) must raise, never silently build an invalid unbounded
+    sparse formulation."""
+    phys = [PhysicalStat(table="t", columns=("a", "b"), level=1, cost=100)]
+    base = 45.0
+    opts = [Option(stat_index=0, qerror=3.0, level=1, query="q1", cand="t(a,b)")]
+    for bad_cap in (None, 2):
+        with pytest.raises(ValueError):
+            solve_ilp(phys, [opts], [base], budget_bytes=1000,
+                      optimizer_class=OptimizerClass.SPARSE_LINEAR,
+                      per_query_cap=bad_cap)
+    # ...and cap=1 is accepted.
+    res = solve_ilp(phys, [opts], [base], budget_bytes=1000,
+                    optimizer_class=OptimizerClass.SPARSE_LINEAR,
+                    per_query_cap=1)
+    assert res.chosen == [["t|a,b|L1"]]
+
+
+def test_maintenance_profile_must_cover_candidate_levels():
+    """Candidate-level coverage: if a candidate reaches a higher capacity level
+    than the profile's ladder provides, the staircase would silently skip that
+    threshold and under-charge maintenance. Must raise ValueError instead.
+
+    Ladder (1.0, 10.0) covers levels {0,1}; a level-2 candidate is unrepresentable.
+    """
+    prof = MaintProfile(table_base_tiers={"t": (1.0, 10.0)})  # levels 0..1 only
+    phys = [
+        PhysicalStat(table="t", columns=("a", "b"), level=2, cost=50,
+                     maint_cost=1.0),
+    ]
+    base = 10.0
+    opts = [Option(stat_index=0, qerror=5.0, level=2, query="q1", cand="t(a,b)")]
+    with pytest.raises(ValueError):
+        solve_ilp(phys, [opts], [base], budget_bytes=200,
+                  maint_budget=200.0, maint_profile=prof)
