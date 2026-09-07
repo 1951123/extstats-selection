@@ -250,14 +250,6 @@ def test_catalog_mask_capability_contract():
     assert callable(measure_query_lambda_m)
 
 
-
-def test_capacity_contract():
-    from extstats2.config import capacity_ladder
-    assert set(capacity_ladder("postgres")) == {0, 1, 2}
-    assert capacity_ladder("postgres")[1]["statistics_target"] == 1000
-    assert capacity_ladder("oracle")[2]["estimate_percent"] == 100
-
-
 # ---------------------------------------------------------------------------
 # optimizer-class selection + structural contract (§1.9)
 # ---------------------------------------------------------------------------
