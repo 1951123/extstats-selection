@@ -222,18 +222,6 @@ def test_backend_factory_contracts():
     assert be.name() == "postgres"
     caps = {c.name: c for c in be.supported_capabilities()}
     assert "mcv" in caps
-    # M2 implements Protocol-A; Protocol-M (catalog-mask) is a later enhancement.
-    assert be.has_protocol_m() is False
-    assert be.protocol(None) == "a"
-    assert be.protocol("m") == "a"  # requested m falls back to a until implemented
-    assert be.protocol("a") == "a"
-
-
-def test_oracle_protocol_falls_back_to_a():
-    be = get_backend("oracle")
-    assert be.has_protocol_m() is False
-    assert be.protocol(None) == "a"
-    assert be.protocol("m") == "a"  # requested m falls back to a
 
 
 def test_catalog_mask_capability_contract():

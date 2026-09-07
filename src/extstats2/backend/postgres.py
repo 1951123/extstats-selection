@@ -294,14 +294,6 @@ class PostgresBackend(Backend):
             supports_objectives=("mean",),
         )
 
-    def has_protocol_m(self) -> bool:
-        # PG's catalog-mask (Protocol-M) catalog primitives are implemented
-        # (see PgCatalogDriver / PgPayloadBackup), but the measure-path that
-        # *uses* them (build-all-then-mask scheduler in core/measure) is not yet
-        # wired, so we do not yet advertise Protocol-M through protocol(None).
-        # Flip to True once measure_query dispatches on Protocol-M.
-        return False
-
     def supports_catalog_mask(self) -> bool:
         return True
 

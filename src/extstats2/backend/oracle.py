@@ -20,7 +20,7 @@ created through ``DBMS_STATS``:
   ``USER_TAB_COL_STATISTICS`` (per-hidden-column histogram detail, used as a
   monotonic size proxy).
 - Oracle cannot NULL-mask a single statistic without disturbing neighbours ->
-  ``has_protocol_m() == False``; it uses Protocol-A.
+  ``supports_catalog_mask() == False`` (no Protocol-M); it uses Protocol-A.
 
 Capability mapping (validated): ``mcv`` = column-group histogram (primary);
 ``ndistinct`` = column group without histogram (distinct count only);
@@ -245,9 +245,6 @@ class OracleBackend(Backend):
             capacity_model="per_scan",
             supports_objectives=("mean",),
         )
-
-    def has_protocol_m(self) -> bool:
-        return False
 
     # -- capacity ----------------------------------------------------------
 

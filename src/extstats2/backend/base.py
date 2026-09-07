@@ -15,7 +15,7 @@ Design goals
 3. *Two protocols*: Protocol-A (create -> build -> measure -> drop -> rebuild)
    is the *universal* baseline every backend supports.  Protocol-M (catalog-mask)
    is an optional acceleration; a backend declares support via
-   :meth:`Backend.has_protocol_m` and overrides :meth:`Backend.isolate`.
+     :meth:`Backend.supports_catalog_mask` and overrides :meth:`Backend.isolate`.
 
    Protocol-A cost accounting (one measured (candidate, level) — see
    ``core/measure.py``): ``build`` is the ONLY sampling scan — PG issues one
@@ -192,22 +192,6 @@ class Backend(ABC):
         (sparse + disjoint + fixed+var + mean), which is what PostgreSQL offers.
         """
         return StructuralProps()
-
-    def has_protocol_m(self) -> bool:
-        """Whether this backend supports catalog-mask (Protocol-M) acceleration.
-
-        Default ``False`` (only PostgreSQL does). Backends override to ``True``
-        and override :meth:`isolate` accordingly.
-        """
-        return False
-
-    def protocol(self, requested: Optional[str]) -> str:
-        """Resolve a requested protocol ("a"/"m"/None) to an effective one."""
-        if requested is None:
-            return "m" if self.has_protocol_m() else "a"
-        if requested == "m" and not self.has_protocol_m():
-            return "a"
-        return requested
 
     # -- lifecycle / DDL ---------------------------------------------------
 
@@ -436,32 +420,3 @@ def qerror(estimate: int | float, actual: int | float) -> float:
             lo = 1.0
         return hi / lo
     return max(estimate, actual) / min(estimate, actual)
-
-
-def protocol_a_isolate(backend: Backend, keep: set[StatObject], table: str) -> IsolationCtx:
-    """Reference Protocol-A isolation, usable by any backend.
-
-    Strategy: drop every statistic on ``table`` except ``keep``, measure, then
-    rebuild the dropped ones at their recorded capacity to restore state.
-    """
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _ctx():
-        present = {s for s in backend.list_stats(table)}
-        to_drop = present - keep
-        for s in to_drop:
-            backend.drop_stat(s)
-        try:
-            yield
-        finally:
-            # Rebuild the dropped statistics to restore prior state.
-            for s in to_drop:
-                backend.create_stat(s)
-            if to_drop:
-                # Rebuild at a representative capacity (the object records it).
-                backend.build_stats(list(to_drop), max((s.capacity for s in to_drop),
-                                                       key=lambda c: c.level,
-                                                       default=Capacity(0)))
-
-    return _ctx()

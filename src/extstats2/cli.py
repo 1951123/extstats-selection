@@ -33,7 +33,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--levels", type=int, nargs="+", default=[0, 1],
                    choices=[0, 1],
                    help="S-grid sampling levels to probe (0=30k rows, 1=300k rows)")
-    p.add_argument("--protocol", choices=["a", "m", None], default=None)
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("check", help="validate backend selection + S-grid config")
     return p
@@ -48,7 +47,6 @@ def main(argv: list[str] | None = None) -> int:
         maint_budget=args.maint_budget,
         # old "capacities" field now carries the canonical S-grid level indices
         capacities=tuple(args.levels),
-        protocol=args.protocol,
     )
     if args.command == "check":
         backend = config.get_backend(cfg.backend)
@@ -57,7 +55,6 @@ def main(argv: list[str] | None = None) -> int:
         s_rows = {lv: config.sampling_requested_rows(lv) for lv in args.levels}
         print(f"backend      : {backend.name()}")
         print(f"capabilities : {[str(c) for c in backend.supported_capabilities()]}")
-        print(f"protocol     : {backend.protocol(cfg.protocol)} (requested={cfg.protocol})")
         print(f"bench        : {cfg.bench}")
         print(f"sampling L   : {args.levels} -> requested rows {s_rows} (S-grid)")
         print(f"budget_bytes : {cfg.budget_bytes}")

@@ -125,7 +125,6 @@ class Config:
                                        # derived metrics, not selectable by the MILP)
     capacities: tuple[int, ...] = (0, 1)   # S-grid sampling level indices (L0/L1);
                                     # maps to requested rows via SAMPLING_LEVELS
-    protocol: Optional[str] = None     # None -> backend decides (a/m)
     db: DBConfig = field(default_factory=DBConfig.from_env)
 
 
