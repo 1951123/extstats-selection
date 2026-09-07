@@ -1,7 +1,7 @@
 """Global configuration for the v2 toolkit.
 
 Makes the *backend* (and thus the whole measurement pipeline) pluggable via a
-factory.  Keeps core/ and plan/ free of any imported concrete backend.
+factory.  Keeps core/ free of any imported concrete backend.
 """
 
 from __future__ import annotations

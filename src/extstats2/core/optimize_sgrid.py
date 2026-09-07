@@ -28,7 +28,7 @@ from .optimize import (Option, OptimizerClass, PhysicalStat, solve_ilp)
 
 
 def load_sgrid_problem(outdir: Path, workload: str, backend: str):
-    """Load a workload's saved per-λ results as (meta, per_query_blocks)."""
+    """Load a workload's saved per-sampling-level results as (meta, per_query_blocks)."""
     d = result_dir(outdir, workload, backend)
     meta = read_meta(d)
     blocks = {}
@@ -51,13 +51,21 @@ def build_inner_at_level(
     skip_worse_than_baseline: bool = True,
     qid_table: Optional[dict] = None,
 ) -> tuple[list, list, list]:
-    """Build (phys_stats, queries_options, qbase_per_query) for one λ ``level``.
+    """Build (phys_stats, queries_options, qbase_per_query) for one sampling
+    level ``level``.
 
-    Mirrors :func:`optimize.build_problem` but per-λ: the baseline for each query
-    is that λ's no-ext baseline, and physical stats are (table, colset) each at a
-    representation ``param`` (quantised into ``PhysicalStat.level`` = the param).
+    Mirrors :func:`optimize.build_problem` per sampling level: the baseline for
+    each query is that level's no-ext baseline, and physical stats are (table,
+    colset) each at a representation ``param``.
 
-    ``qid_table`` (optional): ``{qid: table}`` for multi-table workloads. The λ
+    NOTE on ``PhysicalStat.level``: here it carries the REPRESENTATION parameter
+    ``p`` (e.g. 25/50/100...), NOT the outer sampling level ``L`` (0/1). The
+    outer loop over ``L`` selects which ``by_lambda[level]`` slot we feed in;
+    within a slot ``PhysicalStat.level = param`` just distinguishes candidate
+    objects by their representation cost. The generic kernel treats ``level`` as
+    an opaque discrete index.
+
+    ``qid_table`` (optional): ``{qid: table}`` for multi-table workloads. The
     slots carry candidate *columns* but not a per-row table, so without it all
     stats are tagged ``table=""`` (single-table assumption). When supplied, each
     candidate's table is taken from its owning query and physical stats are keyed
@@ -110,8 +118,9 @@ def build_inner_at_level(
 def inner_optimal_at_level(blocks, level, budget_bytes, *,
                            maint_budget: Optional[float] = None,
                            ) -> tuple[Optional[ILPResult], list, list]:
-    """Solve the inner selection at one λ under a storage (``budget_bytes``)
-    and, optionally, a maintenance budget (``maint_budget``) hard constraint.
+    """Solve the inner selection at one sampling level under a storage
+    (``budget_bytes``) and, optionally, a maintenance budget (``maint_budget``)
+    hard constraint.
 
     Always the cap=1 / exact arithmetic-mean formulation (SPARSE_LINEAR); the
     optimization objective is fixed — no objective switch here.
@@ -135,9 +144,10 @@ def search_sgrid(outdir: Path, workload: str, backend: str,
                   budget_bytes: int, *, maint_budget: Optional[float] = None,
                   fixed_per_table: Optional[dict] = None,
                   rho: float = 0.0) -> dict:
-    """Outer search over λ: for each tier solve the inner MILP under
-    ``budget_bytes`` (storage) and (if given) ``maint_budget`` (maintenance hard
-    cap), and additionally add Σ_t ρ·f_t(λ) per-table fixed if rho/fixed given.
+    """Outer search over the S-grid of sampling levels: for each level ``L``
+    solve the inner MILP under ``budget_bytes`` (storage) and (if given)
+    ``maint_budget`` (maintenance hard cap), and additionally add
+    ``Σ_t ρ·f_t(L)`` per-table fixed if rho/fixed given.
 
     Returns per-level outcome rows: {level, mean_qerror(baseline), mean_qerror(deployed),
     n_selected, total_bytes, total_maint, selected_summary}.
@@ -151,9 +161,10 @@ def search_sgrid(outdir: Path, workload: str, backend: str,
         if res is None:
             out[level] = {"status": "no-candidates", "baseline_mean": float(np.mean(qbases)) if qbases else None}
             continue
-        # per-query baseline mean at this λ
+        # per-query baseline mean at this sampling level
         base_mean = float(np.mean([b for b in qbases if b == b]))
-        # total per-table fixed = sum over distinct tables of f_t(λ) (all rows share one table here)
+        # total per-table fixed = sum over distinct tables of f_t(L);
+        # (single-table scope today: all rows share one table here)
         n_tables = len({p.table for p in phys}) if any(p.table for p in phys) else 1
         fixed = 0.0
         if fixed_per_table is not None and level in fixed_per_table:
