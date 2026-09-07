@@ -10,9 +10,8 @@ CANONICAL (S-grid / lambda-first) entry points are re-exported here:
   - generic inner : optimize (OptimizerClass / solve_ilp / build_problem ...);
   - basics        : candidates / predicates / queries.
 
-The old v1 / capacity-era ``measure_query`` is NOT re-exported here (see the
-NOTE below the imports); it stays reachable under ``extstats2.core.measure``
-for the legacy evaluators / tests only.
+The legacy v1 / capacity-era ``measure.py`` has been removed (single-version
+policy); measurements go through ``measure_lambda`` only.
 """
 
 from .candidates import CandidateSet, generate_candidates, generate_candidates_per_query
@@ -35,13 +34,6 @@ from .optimize_lambda import (build_inner_at_level, inner_optimal_at_level,
                               load_lambda_problem, search_lambda)
 from .predicates import predicate_columns
 from .queries import BenchQuery
-
-# NOTE (legacy-cleaning batch-1): the old v1 / capacity-era measurement
-# ``measure_query`` is intentionally NOT re-exported here — it lives under
-# ``extstats2.core.measure`` (submodule) for the legacy evaluators / tests and is
-# otherwise unreachable from the package surface.  ``core.measure_lambda`` is the
-# canonical S-grid measurement; ``core.optimize_lambda`` is the canonical outer
-# λ-selection driver.
 
 __all__ = [
     # canonical S-grid measurement + corpus IO

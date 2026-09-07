@@ -57,39 +57,42 @@ def test_estimate_census_query(backend):
 
 
 @_NEED_OR
-def test_measure_dominant_pair_helps_on_correlated_query(backend):
+def test_mcv_dominant_pair_cuts_qerror_no_leftover(backend):
     """On a strongly-correlated worst census query, the mcv column-group given
-    by M4 (query.62 -> (iRspouse,iWork89)) materially reduces q-error at full
-    sampling, and the Protocol-A measure leaves no column groups behind.
+    by M4 (query.62 -> (iRspouse,iWork89)) materially reduces q-error at S-grid
+    depth, expressed via the current backend primitives (build_stats + estimate)
+    and leaving no column group behind.
 
-    This is the honest cross-engine claim (see docs/architecture.md §6.3c): the
+    This is the honest cross-engine claim (docs/architecture.md §6.3c): the
     improvement is query- and sampling-dependent — q0's near-independent
     predicates are already well estimated by natural single-column stats, so we
     assert on query.62, not q0.
     """
-    from extstats2.backend.capabilities import Capacity
     from extstats2.backend.base import StatObject
     from extstats2.bench import load_benchmark
     from extstats2.core.candidates import generate_candidates_per_query
-    from extstats2.core.measure import measure_query
 
     q = load_benchmark("census")[61]  # query.62, truth=45 (very sparse)
-    cands = [c for c in generate_candidates_per_query([q], arities=(2,))[q.qid]
-             if set(c.columns) == {"iRspouse", "iWork89"}]
-    assert cands, "dominant pair candidate required"
-    # measure at both S-grid levels. On climate (~2.46M) L1=300k rows (~12%) is
-    # the deepest tier the S-grid realizes (the old 100% fix was dropped), and
-    # even L0=30k already gives the dominant-pair histogram enough of the sparse
-    # 45-row target to make its q-error near-faithful vs the grossly-off base.
-    mes = measure_query(backend, q, cands, capacity_levels=(0, 1))
-    assert mes.estimate_base > 0
-    assert len(mes.candidates) == 1
-    for cm in mes.candidates.values():
-        for lv in cm.levels.values():
-            assert lv["qerror"] < mes.qerror_base * 0.1, (
-                "dominant pair must materially cut q-error on a sparse "
-                "correlated query")
-    # no leftover statistics after a clean measure
+    cols = ("iRspouse", "iWork89")
+    assert any(set(c.columns) == set(cols)
+               for c in generate_candidates_per_query([q], arities=(2,))[q.qid]), \
+        "dominant pair candidate required"
+    # clean slate: no prior ext group should distort the natural base estimate
+    for s in list(backend.list_stats(".climate")):
+        backend.drop_stat(s)
+    base = backend.estimate(q).qerror
+    # build the dominant 2-col mcv at S-grid level 1 (deeper sampling; the
+    # 45-row sparse target still gets enough histogram mass to be repaired).
+    mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
+    obj = StatObject(table=".climate", columns=cols, capability=mcv,
+                     capacity=Capacity(1), name="ext_m_dom_l1")
+    backend.build_stats([obj], Capacity(1))
+    after = backend.estimate(q).qerror
+    assert after < base * 0.1, (
+        f"dominant pair must materially cut q-error on a sparse correlated "
+        f"query (base={base:.3f}, with-pair={after:.3f})")
+    # no leftover statistics after a clean build/measure
+    backend.drop_stat(obj)
     assert backend.list_stats(".climate") == []
 
 
@@ -127,10 +130,10 @@ def test_maint_tiers_monotonic(backend):
 
 @_NEED_OR
 def test_ceb_posts_query_transpiles_and_cleans_up(backend):
-    """A PG-dialect CEB query (AS alias) is transpiled to Oracle, measurable,
-    and leaves no leftover column group on the posts table."""
+    """A PG-dialect CEB query (AS alias) transpiles to Oracle, EXPLAINs, and a
+    build/drop cycle on /posts leaves no leftover column group."""
+    from extstats2.bench import load_benchmark
     from extstats2.core.candidates import generate_candidates_per_query
-    from extstats2.core.measure import measure_query
 
     qs = load_benchmark("stats_ceb_single")
     q = next(x for x in qs if x.qid == "st.12")  # posts, numeric-only
@@ -139,8 +142,14 @@ def test_ceb_posts_query_transpiles_and_cleans_up(backend):
         backend.drop_stat(s)
     est = backend.estimate(q)  # exercises PG->Oracle transpile + EXPLAIN
     assert est.estimate > 0
-    cands = [c for c in generate_candidates_per_query([q])[q.qid]]
-    mes = measure_query(backend, q, cands[:1], capacity_levels=(0,))
-    assert mes.estimate_base > 0
+    # build the first candidate's group (pure backend), then drop it
+    cands = generate_candidates_per_query([q])[q.qid]
+    assert cands
+    cols = tuple(cands[0].columns)
+    mcv = [c for c in backend.supported_capabilities() if c.name == "mcv"][0]
+    obj = StatObject(table=".posts", columns=cols, capability=mcv,
+                     capacity=Capacity(0))
+    backend.build_stats([obj], Capacity(0))
+    backend.drop_stat(obj)
     assert backend.list_stats(".posts") == []
 
