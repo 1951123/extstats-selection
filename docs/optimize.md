@@ -138,7 +138,9 @@ $$
   各统计真实所属表累计 ⇒ 单值 `fixed_sec=None`。
 - **measured-or-raise（强制口径）**：维护成本约束只允许在模型参数**已实测**后施加
   （`_maint.json` 存在且该 (table,level) 已测）。缺文件或未测档会抛
-  `MaintNotMeasuredError`——无闭式回退。故每条 `maint` 曲线都以实测 `_maint.json` 喂养。
+  `MaintNotMeasuredError`——无闭式回退。故每条 `maint` 曲线都以实测 `_maint.json` 喂养
+  （`fixed`/`c_var` 按 (表,档)，`replace` 覆盖 corpus 里 per-candidate 的 `maint_var` 占位；
+  那个 `maint_var` 只是模型常数占位、无实测含义，见 measure §3.1）。
 - **两个预算轴正交**：想给哪个就施加哪条（storage 或 maint），不强制同时给。`optimize.md`
   下文的 storage 曲线 = 只施加 (storage)；maint 曲线 = 只施加 (maint)。
 - **cap=1（默认档）** 使目标从乘性近似退化为**精确线性**（见 architecture §2/§3）：$\min \sum_i(e_i^0-\sum_s\Delta_{is}x_{is})$，本仓各 bench 曲线即此档。**可选保真度软罚（§1.2a，默认关）** 在此档上按每 query 置信权重 `w_i` 缩放 `Δ` 贡献；实现面为

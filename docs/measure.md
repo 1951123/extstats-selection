@@ -123,7 +123,8 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 
 - query-level q-error（该候选单独激活、同一采样态下的误差）；
 - no-ext 基线 q-error（该 S 态无扩展统计）；← 由同采样态给出，构成 `e^0`
-- 该统计在该级下的**存储字节**与**维护秒**（供 optimize 消费）；
+- 该统计在该级下的**存储字节**（供 optimize 的 storage 轴消费）与一个 per-candidate
+  **维护占位 `maint_var`**（⚠️ 见 §3.1：这是**占位**，不是 optimize maint 轴真正消费的值）；
 - 采样捕获量（λ 式：组合出现的期望次数）与方差相关字段（标识低可信档，不硬删，
   供优化保守化，见 architecture §3）。
 
@@ -131,6 +132,16 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 单独使用"的死候选。
 
 ## 3.1 维护成本模型：measured-linear + `_maint.json` 伪影
+
+> **两个"维护"量不要混：`maint_var`(语料占位) ≠ `c_var`(模型真值)。**
+> - 语料里 per-candidate 的 **`maint_var`** 是**占位**：最初设想是"实测单个 (colset,p)
+>   扩展统计对象自身的刷新边际"，但已确认**那样测很难、误差很大**（single ext-stat 在
+>   共享 scan 下是微小、可翻转残差，很难隔离计时），故并未实行，只留下一个闭式模型常数
+>   占位（PG ~0.02/stat@target1000、Oracle 平坦 0.002）。**这些 0.002/0.02 数值无实测含义**，
+>   不应被当成真实每统计维护秒。
+> - 维护成本模型**真正用的**是实测的 **`c_var(t,ℓ)`**（+ `fixed(t,ℓ)`），存于
+>   `_maint.json`、按 $(t,\ell)$ 实测（本 § 下文）。optimize 的 maint 轴(single/multi 曲线)
+>   一律用 `_maint.json` 的 `c_var`(replacement) 覆盖 corpus 占位，绝不把 `maint_var` 当实测。
 
 「该统计的维护秒」不是逐候选单独计时（单扩展统计在共享扫描下是微小、可翻转残差，
 不可靠计时），而是用一个**实测线性模型**离线拟合，存成语料伪影，供 optimize 的 maint

@@ -18,13 +18,16 @@ carries BOTH its no-ext baseline and the candidate readings measured in that
 same level's sampling state — the same-``S`` fair pairing the optimizer consumes.
 
 NOTE on ``maint_var`` (2026-09-06): each slot's ``maint_var`` is currently a
-*placeholder* — the backend's closed-form model constant (PG: 0.002 at L0 / 0.02
-at L1 for 2-col stats; Oracle: a flat ``_VAR_PER_STAT_S``), NOT a timed
+*placeholder* — the backend's closed-form model constant (PG: ~0.002 at L0 /
+~0.02 at L1 per 2-col stat; Oracle: a flat ``_VAR_PER_STAT_S``), NOT a timed
 per-extstat measurement. It is deliberately kept as a first-class per-slot field
 so a future real per-extstat measurement (e.g. timing the marginal refresh of one
 (``colset``, ``param``) object) can replace it as a drop-in at the single
 ``mv = backend.stat_maintain_var(obj)`` seam inside each measure driver. Until
-then, treat ``maint_var`` as a model estimate, not measured evidence.
+then, treat ``maint_var`` as a model estimate without measured meaning — **it is
+never read by the maintainance curves**: those drive the maint axis purely from
+the measured ``c_var``/``fixed`` in ``_maint.json`` (see docs/measure.md §3.1),
+overriding any corpus ``maint_var``.
 """
 
 from __future__ import annotations
