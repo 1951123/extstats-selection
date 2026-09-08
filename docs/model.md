@@ -83,6 +83,27 @@ scan 是否可靠地看到该 query 真答案"的是
 > 注意与 §2 的区分：`λ` 只是 `S`、`N_t` 的派生占比；`λ_q = actual·λ` 是**每 query 的
 > 保真度量**。二者都不是搜索轴——真正被搜索/约束仍以 `S`（采样）与 `p`（表示）。
 
+### 3b. 采样层分配的范围（sampling-level allocation scope；当前实现是一简化）
+
+研究性理想（模型层面）：sampling level 是 **per-table** 的决策变量 —— 不要求全局
+同一个 `L∈{L0,L1}` 施加到所有表，而是每表可独立选 `l_t ∈ {L0,L1}`：
+
+```
+table A -> L0 ; table B -> L1 ; table C -> L0 ; ...
+```
+
+这天然契合维护成本模型（见 measure.md §3.1 / optimize.md §1.2）
+$$M=\sum_t\big[c_{\mathrm{fixed}}(t,l_t)+n_t\,c_{\mathrm{var}}(t,l_t)\big],$$
+因为那里本就逐表用自己的 `l_t`。
+
+**当前实现是上述联合决策的简化，不是研究假设本身**：现在的代码是“所有 candidate 都按
+L0 求一次 MILP → 所有按 L1 求一次 → 逐 budget 取较优 `(L*, mean)`”
+（`optimize_sgrid.search_sgrid` 对每个 `level` 用同一全局档喂 `build_inner_at_level`
+再 argmin-over-level）。它只能表达"全 L0 或全 L1"，**不能表达混档**（表 A 用 L0、表 B 用 L1）。
+
+> 若未来扩展优化器允许 **mixed-level per-table allocation**，这是对本模型的**自然扩展**
+> （把 `l_t` 抬成逐表决策而非一次全局档），并不改变研究问题本身。
+
 ## 4. DBMS 职责 (Backend responsibility)
 
 - **Core** 只定义抽象的 `SamplingLevel`（S-grid 层索引）与表示参数 `p`，不碰引擎。
