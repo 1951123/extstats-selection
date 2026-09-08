@@ -65,7 +65,7 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 > 为何 `_meta.tiers.S_rows` 不写成单值而是按表落 `table_s_rows`（一表一意，stats_CEB 跨
 > 多表各有各 N）。
 
-### 1.2 λ 与 fidelity：表行数三类决定了"每条查询能采到多少个真值行"
+### 1.2 λ(采样比例)、λ_q(期望捕获) 与 fidelity：表行数三类决定了"每条查询能采到多少个真值行"
 
 **符号定义（先厘清，避免混淆三个量）— 落盘字段列为真实 JSON 键：**
 
@@ -73,10 +73,15 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 |---|---|---|---|
 | $N_t$ | 表行数 | owner 表 $t$ 的总行数 | 不在每条 query 文件；存于 `_meta.json` / 由 DB 提供（backend `num_rows`） |
 | $S_{\text{realized}}(t,\ell)$ | **采样行数(采样数)** | 档 $\ell$ 实际采多少行 $=\min(S_{\ell},N_t)$ | slot.`S_rows`（`_meta.table_s_rows[t][ℓ].S_rows`）；backend 方法 `sample_rows_per_level` 仅是提供者 |
-| $f_{t,\ell}$ | 采样比例 | $S_{\text{realized}}/N_t$ | （可派生，不落盘） |
+| $\lambda(t,\ell)$ | **采样比例 (sampling fraction, 派生)** | $\lambda=S_{\text{realized}}/N_t$ —— **只取决于表行数与采样档**，不含查询 | （可派生，不落盘） |
 | $\text{truth}_q$ | 查询真值 | 该查询真正命中的行数 | 文件顶层 `actual` |
-| $\lambda_q(t,\ell)$ | **期望捕获量** | $\lambda=f_{t,\ell}\cdot\text{truth}_q$：查询命中的行指望在样本里出现几次 | 每候选 `lambda_q`（同一 (query,level) 各候选同值；v1 曾叫 `lambda_expected`） |
-| fidelity | 可信性判定 | 由 λ 高低得出：λ≪1→不可信；λ≫1→保真 | 无独立字段（看 `lambda_q`） |
+| $\lambda_q(t,\ell)$ | **期望捕获量 (expected sampled actual)** | $\lambda_q=\underbrace{f_{\text{frac}}\cdot\text{truth}_q}_{}=\text{truth}_q\cdot\lambda$：查询命中的行指望在样本里出现几次。**比 λ 多乘了查询真值 $\text{truth}_q$，故是逐 query 的量** | 每候选 `lambda_q`（同一 (query,level) 各候选同值；v1 曾叫 `lambda_expected`） |
+| fidelity | 可信性判定 | 由 $\lambda_q$ 高低得出：$\lambda_q\ll1$→不可信；$\lambda_q\gg1$→保真 | 无独立字段（看 `lambda_q`） |
+
+> ⚠️ **最容易混淆的是一字之差的 $\lambda$ 与 $\lambda_q$**（我之前常混）：
+> - $\lambda$（本表第三行）= **采样比例**：只由 `S_realized` 与表行数 `N` 决定，**不含查询**，是"这条表这个档采了多大比例"。
+> - $\lambda_q$（本表第五行）= **期望捕获量**：$\lambda_q=\mathrm{truth}_q\cdot\lambda$，多乘了查询真值，是"在这个比例下，这条查询的真答案行指望被采到几次"；它是**逐 query** 的量、决定测量可不可信。
+> - 文档其余叙述里凡说"λ≪1 看不到组合"的，实际都在指 **$\lambda_q$**（捕获量），不是采样比例 $\lambda$。以此表为准，别因为少写一个下标 `_q` 又混起来。
 
 > **真实逐-query 落盘的 candidate 记录**（每条：`cols, param, estimate, qerror,
 > lambda_q, size_bytes, maint_var`）：`cols`=列组、`param`=表示参数 $p$、`estimate`=该
@@ -84,17 +89,19 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 > 上述期望捕获量、`size_bytes`=存储字节、`maint_var`=维护占位（见 §3.1）。slot 级还有
 > `S_rows` 与该层 `baseline{estimate,qerror}`。
 
-要点：**λ 不是"采样数"**——它是"采样比例 × 查询真值"的交互量（还依赖 truth，是逐查询
-的量）；只有在大表上真值刚好等于全表采样那档时才和采样数同量级。**fidelity 也不是 λ 本身**，
-而是对 λ 落在哪一侧的**可信性判定**（代码落盘的是 per-candidate `lambda_q` = 期望捕获量，即
-该 interaction；fidelity 是从 λ 推得的结论，没有独立字段）。
+要点：**$\lambda_q$ ≠ $\lambda$ ≠ 采样数。** 采样数 $S_{\text{realized}}$ 是一条表/档采了多少行；
+采样比例 $\lambda=S_{\text{realized}}/N$；而 $\lambda_q=\text{truth}_q\cdot\lambda$ 是"采样比例 ×
+查询真值"的交互量——它是逐查询的量，只有当真值恰好等于全表采样那档时才和采样数同量级。
+**fidelity 也不是 $\lambda_q$ 本身**，而是对 $\lambda_q$ 落在哪一侧的**可信性判定**（代码落盘的是
+per-candidate `lambda_q`=期望捕获量，即该交互量；fidelity 是从 $\lambda_q$ 推得的结论，没有独立字段）。
 
-- $\lambda\ll 1$：单次采样**很可能根本看不到**驱动该查询的组合 → 实测 q-error **高方差 /
+- $\lambda_q\ll 1$：单次采样**很可能根本看不到**驱动该查询的组合 → 实测 q-error **高方差 /
   不可信**（配合 `qerror_std`/`qerror_worst`；重复测 1 次以上时取保守值而非乐观均值）。
-- $\lambda\gg 1$：采到多次 → 测量**保真**（组合必被捕获，读数稳定）。
+- $\lambda_q\gg 1$：采到多次 → 测量**保真**（组合必被捕获，读数稳定）。
 
-**关键：λ 是"逐表、逐查询 truth"的量，但三类表行数决定了 $f_{t,\ell}$（每表每级能采多大比例）**，
-因此把三类与 fidelity 直接挂钩：
+**关键：$\lambda$（采样比例）只由采样档与表行数决定（不含查询），而 $\lambda_q=\text{truth}_q\cdot\lambda$
+才是"逐表、逐查询 truth"的量；三类表行数决定的是 $\lambda=S_{\text{realized}}/N_t$（每表每级能采多大比例）**，
+因此把三类与 $\lambda_q$ 的 fidelity 直接挂钩：
 
 | 类 | $f$ 在这类的形态 | fidelity 含义 |
 |---|---|---|
