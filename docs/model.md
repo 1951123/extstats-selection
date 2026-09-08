@@ -16,10 +16,14 @@
 本研究的因果方向为：
 
 ```
-S  ──(requested sampling)→  S_realized(t,S)  ──→  λ(t,S)     (derived)
+S  ──(requested sampling)→  S_realized(t,S)  ──→  λ(t,S) ──(·actual(q))──→ λ_q(q,S)
+ │                                                                       (derived)
  │
  └────────────→  p   (representation parameter, 在给定 S 下选择)
 ```
+
+派生链严格单向（不为反向）：主实验变量是 `S` 与 `p`；`S_realized`、`λ`、`λ_q`
+全是 `S`、表行数 `N_t` 与查询真值 `actual(q)` 的派生量，不是独立控制变量。
 
 - **S** — requested sampling rows。这是**研究主动搜索 / 定义的一级变量**
   （config `SAMPLING_LEVELS`：L0 = 30 000，L1 = 300 000）。
@@ -28,13 +32,19 @@ S  ──(requested sampling)→  S_realized(t,S)  ──→  λ(t,S)     (deriv
 
 ## 2. 派生量 (Derived quantities)
 
-对表 `t`、请求采样行 `S`、表行数 `N_t`：
+对表 `t`、请求采样行 `S`、表行数 `N_t`、查询真值 `actual(q)`：
 
 - 实际采样行：`S_realized(t,S) = min(S, N_t)`
 - 采样占比（reporting / fidelity 指标，**不是搜索轴**）：
   `λ(t,S) = S_realized(t,S) / N_t`
+- 每-query 保真度（该 query 在该层的测量可不可信）：
+  `λ_q(q,S) = actual(q) · λ(q,S)= actual(q) · S_realized(q,S) / N_q`
+  —— 即期望落进本次 scan 样本的真答案行数；是 **per-(query, level) 标量**（与候选
+  `p`/colset 无关），`λ_q ≪ 1` 表示该层可能根本没见到答案组合。
 
 > 关键推论：`λ` 完全由 `S` 与 `N_t` 派生，因此**不是独立实验控制变量**。
+> `λ_q` 只比 `λ` 多乘一个每-query 数据常量 `actual(q)`，同样是派生量，不是搜索轴
+> （其可选用法见 §3a 保真度软罚）。
 > 过去把模型描述成 `capacity / λ` 优先是错的；正确是 `S`（sample-first / S-grid）。
 
 ## 3. 优化 (Optimization)
