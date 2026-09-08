@@ -38,13 +38,8 @@ $\text{geo}$/$\max$ 则是在该选中集上算出的**派生报告指标**（�
 > `objective` 选择开关——cap=1 走 sparse-linear 精确算术均值、cap>1/None 走乘性几何
 > 代理，由 `optimizer_class`/cap 决定（`solve_ilp` 已去掉一个曾会让 reviewer 误以为支持
 > worst/geomean 选择的 `objective` 参数）。`p90`/`worst`/`geo`(最大) 都只作为**求解后的
-> 派生评估指标**从 `qerror_per_query` 计算，绝不改变求解本身。
->
-> **可选保真度软罚（model.md §3a，default off）：**不违背上式"无 objective 开关"——它不是
-> 一种目标选择，而是一个默认关的多项式：当显式传入 `fidelity_floor=k`（默认 `None`=关）时，
-> 每条 query 对该层候选的收益贡献 `Δ_is` 乘置信权重 `w=min(1,λ_q/k)`（只改变"哪些收益被
-> credit"，上报的物理 q-error 仍是真 Δ 解出的）。`k=None` 时 `w≡1`，等式与"未加保真度项"
-> 逐字一致。
+> 派生评估指标**从 `qerror_per_query` 计算，绝不改变求解本身。**（可选保真度软罚的正式
+> 形式见 §1.2a —— 它是默认关的乘子，不入 §1.2 上述"由档决定"的目标句集。）**
 
 > **乘性代理把它们组织为带 query-level 下界的 workload model（Option B）。** 对
 > `cap>1`，我们采用乘性 workload 代理
@@ -69,9 +64,13 @@ $\text{geo}$/$\max$ 则是在该选中集上算出的**派生报告指标**（�
 | $B_t[\ell]$ = $\mathrm{fixed}(t,\ell)$（maint） | 表 $t$ 刷新一次的**实测**一次性固定秒（该档 $S$ 下共享扫描成本） | 见下方**维护成本模型** |
 | $y_s\in\{0,1\}$ | 是否创建统计 $s$ | 物理创建（跨 query 共享） |
 | $x_{is}\in\{0,1\}$ | 查询 $i$ 是否选用 $s$ | 仅当 $s\in O_i$ |
+| $\lambda_q(i,\ell)$ = $a_i\cdot\lambda$ | 查询 $i$ 在该采样档 $\ell$ 的**保真度量**：期望落进本次 scan 样本的真答案行数 | 每 (query,档) 标量（见 model.md §2） |
+| $k$（超参，default `None`） | 保真度下限（`fidelity_floor`）；`None`=关闭 | 见 §1.3 可选软罚 |
+| $w_i=\min\!\big(1,\ \lambda_q(i,\ell)/k\big)$ | 查询 $i$ 在该档的置信权重（截断线性、单调） | `k=None⇒w_i≡1`；仅当启用才打折该层收益 |
 
 fidelity/λ 的处理沿用 measure §1.2：低 λ 档的 `e_is` 以保守化读数（如 `worst`/经 σ 抬高）
-进入 $e_{is}$，不硬删该候选/查询。
+进入 $e_{is}$，不硬删该候选/查询。**新：** 除此之外还有一个**默认关的可选软罚**（§1.3），
+它按每-query 保真度 $\lambda_q$ 在“绝对最优 credit”层再打一层，不改物理 `e_is`。
 
 ### 1.2 优化问题形式化（MILP）
 
@@ -90,6 +89,24 @@ $$
 \min\ \tfrac{1}{|Q|}\!\sum_{i\in Q}\Big[e_i^0-\sum_{s\in O_i}\Delta_{is}x_{is}\Big],
 \qquad \Delta_{is}=e_i^0-e_{is}\,(\ge0).
 $$
+
+#### 1.2a 可选保真度软罚（默认关）下，cap=1 的目标改写
+
+当 `fidelity_floor=k`（model.md §3a）被显式启用时，cap=1 目标变成对每条 query
+的**收益贡献按置信权重折减**：
+
+$$
+\min\ \tfrac{1}{|Q|}\!\sum_{i\in Q}\Big[e_i^0-\underbrace{w_i}_{=\min(1,\ \lambda_q(i,\ell)/k)}\sum_{s\in O_i}\Delta_{is}x_{is}\Big],
+\qquad w_i=\min\!\Big(1,\ \tfrac{\lambda_q(i,\ell)}{k}\Big).
+$$
+
+要点（与 model.md §3a 一致）：
+- `k=None`（默认）⇒ `w_i≡1`，上式逐字退化为上面的原始 cap=1 公式（**零行为改变**）。
+- `w_i` 是该 (query, 档) 的**常量**（`λ_q` 与 `p`/colset 无关），故它只整体缩放 `i` 的 `Δ` 贡献；
+  物理 `e_is` 不变 ⇒ 求解后的 `qerror_per_query` decode 仍是**真 Δ** 解出的上报值，绝不伪造。
+- 语义：`λ_q(i,ℓ) < k` 的查询在该层的 extstat“声称收益”按 `λ_q/k` 打折，视为浅 scan 噪声
+  → 更少被 credit 抢预算；`λ_q ≥ k` 完全不被罚。
+- 它仍**不是 objective 开关**（不选 worst/geomean），也不是新约束，只是默认关的乘子。
 
 公共约束（选一个预算轴施加；storage 与 maint 正交）：
 
@@ -124,7 +141,9 @@ $$
   `MaintNotMeasuredError`——无闭式回退。故每条 `maint` 曲线都以实测 `_maint.json` 喂养。
 - **两个预算轴正交**：想给哪个就施加哪条（storage 或 maint），不强制同时给。`optimize.md`
   下文的 storage 曲线 = 只施加 (storage)；maint 曲线 = 只施加 (maint)。
-- **cap=1（默认档）** 使目标从乘性近似退化为**精确线性**（见 architecture §2/§3）：$\min \sum_i(e_i^0-\sum_s\Delta_{is}x_{is})$，本仓各 bench 曲线即此档。
+- **cap=1（默认档）** 使目标从乘性近似退化为**精确线性**（见 architecture §2/§3）：$\min \sum_i(e_i^0-\sum_s\Delta_{is}x_{is})$，本仓各 bench 曲线即此档。**可选保真度软罚（§1.2a，默认关）** 在此档上按每 query 置信权重 `w_i` 缩放 `Δ` 贡献；实现面为
+  `extstats2.core.optimize_sgrid.build_inner_at_level(..., fidelity_floor=k, out_weights=...)`
+  → `solve_ilp(..., query_weight=...)`，`k=None` 时行为与"未加软罚"完全一致。
 - 约束都线性/已线性化 ⇒ 用 `scipy.optimize.milp` 一次求得该 budget 与档下的**模型内全局最优**，
   不靠搜索。
 - L0/L1 分别按各自「只允许 ℓ=0 或只允许 ℓ=1」再解，得到两条曲线；再做 **argmin-over-level**
