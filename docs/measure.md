@@ -67,21 +67,27 @@ $$S_{\text{realized}}(t,\ell)=\min(S_{\ell},\,N_t);\quad
 
 ### 1.2 λ 与 fidelity：表行数三类决定了"每条查询能采到多少个真值行"
 
-**符号定义（先厘清，避免混淆三个量）：**
+**符号定义（先厘清，避免混淆三个量）— 落盘字段列为真实 JSON 键：**
 
-| 符号 | 名称 | 定义 / 含义 | 落盘字段 |
+| 符号 | 名称 | 定义 / 含义 | 落盘字段 / 位置 |
 |---|---|---|---|
-| $N_t$ | 表行数 | owner 表 $t$ 的总行数 | `num_rows` |
-| $S_{\text{realized}}(t,\ell)$ | **采样行数(采样数)** | 档 $\ell$ 实际采多少行 $=\min(S_{\ell},N_t)$ | `sample_rows_per_level` |
-| $f_{t,\ell}$ | 采样比例 | $S_{\text{realized}}/N_t$ | （可派生） |
-| $\text{truth}_q$ | 查询真值 | 该查询真正命中的行数 | `actual` |
-| $\lambda_q(t,\ell)$ | **期望捕获量** | $\lambda=f_{t,\ell}\cdot\text{truth}_q$：查询命中的行指望在样本里出现几次 | `lambda_expected` |
-| **fidelity** | 可信性判定 | 由 λ 高低得出：λ≪1→不可信；λ≫1→保真 | 无独立字段（看 λ） |
+| $N_t$ | 表行数 | owner 表 $t$ 的总行数 | 不在每条 query 文件；存于 `_meta.json` / 由 DB 提供（backend `num_rows`） |
+| $S_{\text{realized}}(t,\ell)$ | **采样行数(采样数)** | 档 $\ell$ 实际采多少行 $=\min(S_{\ell},N_t)$ | slot.`S_rows`（`_meta.table_s_rows[t][ℓ].S_rows`）；backend 方法 `sample_rows_per_level` 仅是提供者 |
+| $f_{t,\ell}$ | 采样比例 | $S_{\text{realized}}/N_t$ | （可派生，不落盘） |
+| $\text{truth}_q$ | 查询真值 | 该查询真正命中的行数 | 文件顶层 `actual` |
+| $\lambda_q(t,\ell)$ | **期望捕获量** | $\lambda=f_{t,\ell}\cdot\text{truth}_q$：查询命中的行指望在样本里出现几次 | 每候选 `lambda_q`（同一 (query,level) 各候选同值；v1 曾叫 `lambda_expected`） |
+| fidelity | 可信性判定 | 由 λ 高低得出：λ≪1→不可信；λ≫1→保真 | 无独立字段（看 `lambda_q`） |
+
+> **真实逐-query 落盘的 candidate 记录**（每条：`cols, param, estimate, qerror,
+> lambda_q, size_bytes, maint_var`）：`cols`=列组、`param`=表示参数 $p$、`estimate`=该
+> 统计下的引擎估计行数（原始读数）、`qerror`=据此相对 `actual` 的 q-error、`lambda_q`=
+> 上述期望捕获量、`size_bytes`=存储字节、`maint_var`=维护占位（见 §3.1）。slot 级还有
+> `S_rows` 与该层 `baseline{estimate,qerror}`。
 
 要点：**λ 不是"采样数"**——它是"采样比例 × 查询真值"的交互量（还依赖 truth，是逐查询
 的量）；只有在大表上真值刚好等于全表采样那档时才和采样数同量级。**fidelity 也不是 λ 本身**，
-而是对 λ 落在哪一侧的**可信性判定**（代码落盘的是 `lambda_expected`；fidelity 是从 λ 推得的
-结论，没有独立字段）。
+而是对 λ 落在哪一侧的**可信性判定**（代码落盘的是 per-candidate `lambda_q` = 期望捕获量，即
+该 interaction；fidelity 是从 λ 推得的结论，没有独立字段）。
 
 - $\lambda\ll 1$：单次采样**很可能根本看不到**驱动该查询的组合 → 实测 q-error **高方差 /
   不可信**（配合 `qerror_std`/`qerror_worst`；重复测 1 次以上时取保守值而非乐观均值）。
