@@ -39,6 +39,12 @@ $\text{geo}$/$\max$ 则是在该选中集上算出的**派生报告指标**（�
 > 代理，由 `optimizer_class`/cap 决定（`solve_ilp` 已去掉一个曾会让 reviewer 误以为支持
 > worst/geomean 选择的 `objective` 参数）。`p90`/`worst`/`geo`(最大) 都只作为**求解后的
 > 派生评估指标**从 `qerror_per_query` 计算，绝不改变求解本身。
+>
+> **可选保真度软罚（model.md §3a，default off）：**不违背上式"无 objective 开关"——它不是
+> 一种目标选择，而是一个默认关的多项式：当显式传入 `fidelity_floor=k`（默认 `None`=关）时，
+> 每条 query 对该层候选的收益贡献 `Δ_is` 乘置信权重 `w=min(1,λ_q/k)`（只改变"哪些收益被
+> credit"，上报的物理 q-error 仍是真 Δ 解出的）。`k=None` 时 `w≡1`，等式与"未加保真度项"
+> 逐字一致。
 
 > **乘性代理把它们组织为带 query-level 下界的 workload model（Option B）。** 对
 > `cap>1`，我们采用乘性 workload 代理

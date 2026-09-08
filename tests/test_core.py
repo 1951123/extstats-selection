@@ -398,7 +398,7 @@ def test_y2_budget_binds_on_fixed_charge():
 
 
 # ---------------------------------------------------------------------------
-# per-λ (sampling-first) optimizer consumer — no live DB
+# S-grid (sampling-first) optimizer consumer — no live DB
 # ---------------------------------------------------------------------------
 
 def _mk_lambda_block(qid, actual, lam_blocks):
@@ -465,4 +465,53 @@ def test_lambda_consumer_maint_budget_binds():
     assert res2.total_maint <= 0.25 + 1e-9
     assert len(res2.selected_stats) < n_free
     assert 0 < len(res2.selected_stats) <= 3
+
+
+def _mk_fidelity_block(qid, cols, lamq, base, qerr):
+    """One query, one (query,level) slot: an extstat cutting qerr base->qerr,
+    with fidelity lambda_q (per-query,level). cols is the candidate colset."""
+    return {"qid": qid, "actual": 1, "by_lambda": {"0": {
+        "S_rows": 30000.0, "single_target": None,
+        "baseline": {"estimate": int(base * 10), "qerror": float(base)},
+        "candidates": [{"cols": list(cols), "param": 254,
+                         "estimate": int(qerr * 10), "qerror": float(qerr),
+                         "lambda_q": float(lamq), "size_bytes": 500,
+                         "maint_var": 0.0}]}}}
+
+
+def test_fidelity_soft_penalty_default_off_is_identity():
+    """fidelity_floor=None must reproduce the unweighted objective exactly:
+    two queries competing for one budget slot resolve purely on raw improved
+    the stat with the larger measured benefit, regardless of lambda_q."""
+    from extstats2.core.optimize_sgrid import inner_optimal_at_level
+    # A: small raw gain but high lambda_q; B: large raw gain but tiny lambda_q.
+    blocks = {
+        "qA": _mk_fidelity_block("qA", ["a", "b"], 50.0, 6.0, 1.0),
+        "qB": _mk_fidelity_block("qB", ["c", "d"], 0.5, 20.0, 2.0),
+    }
+    r = inner_optimal_at_level(blocks, "0", budget_bytes=500,
+                               fidelity_floor=None)[0]
+    assert r is not None
+    # B's raw improvement (base 20 -> 2) dominates A's (6 -> 1) => B wins.
+    assert {tuple(p.columns) for p in r.selected_stats} == {("c", "d")}
+    # and explicit floor 0.0 is the same identity
+    r0 = inner_optimal_at_level(blocks, "0", budget_bytes=500,
+                                fidelity_floor=0.0)[0]
+    assert {tuple(p.columns) for p in r0.selected_stats} == {("c", "d")}
+
+
+def test_fidelity_soft_penalty_decredits_low_lambda_q():
+    """A finite k de-credits a (query,level) with low lambda_q: B's claimed gain
+    (credited = raw*min(1, lambda_q/k)) falls below A's once k is large enough,
+    so the trustworthy A is preferred under a shared budget."""
+    from extstats2.core.optimize_sgrid import inner_optimal_at_level
+    blocks = {
+        "qA": _mk_fidelity_block("qA", ["a", "b"], 50.0, 6.0, 1.0),
+        "qB": _mk_fidelity_block("qB", ["c", "d"], 0.5, 20.0, 2.0),
+    }
+    # credited_B(2.0) = min(1, .5/2)*18 = 4.5 < credited_A = 5  => A wins
+    r = inner_optimal_at_level(blocks, "0", budget_bytes=500,
+                               fidelity_floor=2.0)[0]
+    assert r is not None
+    assert {tuple(p.columns) for p in r.selected_stats} == {("a", "b")}
 

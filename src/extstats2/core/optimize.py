@@ -292,6 +292,7 @@ def solve_ilp(
     per_query_cap: Optional[int] = None,
     global_disjoint: bool = False,
     optimizer_class: str = OptimizerClass.MULTIPLICATIVE,
+    query_weight: Optional[list[float]] = None,
 ) -> ILPResult:
     """Solve the multi-select shared-resource ILP with scipy.optimize.milp.
 
@@ -321,6 +322,14 @@ def solve_ilp(
     There is intentionally NO worst-case / min-max objective.  ``p90``, ``worst``
     and ``geo`` are EVALUATION METRICS a caller may compute from the returned
     ``qerror_per_query`` AFTER solving; they never alter the solve itself.
+
+    ``query_weight`` (optional, aligned with ``qerror_base``): a per-query
+    confidence multiplier applied to each option's objective credit (e.g. a
+    fidelity soft-penalty ``w=min(1, lambda_q/k)``). ``None`` (default) means
+    ``w=1`` for every query — an identity that reproduces the unweighted
+    objective exactly. When set it only scales WHICH options are worth crediting
+    (selection); the returned ``qerror_per_query`` decode still uses the true
+    physical ``Δ_is``, never a weighted surrogate.
     """
     n_stats = len(phys_stats)
     n_opt = sum(len(opts) for opts in queries_options)
@@ -413,8 +422,16 @@ def solve_ilp(
     gi = 0
     for q_idx, opts in enumerate(queries_options):
         qbase = qerror_base[q_idx]
+        # Optional fidelity/confidence weight per query (aligned with
+        # ``qerror_base`` / ``queries_options``). Default None => w=1 (identity,
+        # no behavior change). When set, it SCALES ONLY the objective credit of
+        # that query's candidates (which stats are worth selecting); the reported
+        # per-query q-error decode still uses the true measured Δ_is, so a
+        # low-fidelity query is not credited a benefit we do not trust, but its
+        # measured q-error is never falsified.
+        w = query_weight[q_idx] if query_weight is not None else 1.0
         for o in opts:
-            c[n_stats + gi] = _improve(o, qbase)
+            c[n_stats + gi] = _improve(o, qbase) * w
             gi += 1
     integrality = np.ones(n_var)
 

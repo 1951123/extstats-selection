@@ -44,12 +44,51 @@ def _col_identity(cand: dict):
     return tuple(sorted(cand["cols"]))
 
 
+def _lambda_q_of_slot(block: dict, level: str) -> Optional[float]:
+    """Return this (query, sampling level)'s stored ``lambda_q`` (= actual·λ),
+    or None if the slot has no candidate carrying it.
+
+    ``lambda_q`` is a per-(query, level) scalar — identical across every
+    candidate of the slot — so we read it once from the first candidate.
+    """
+    slot = block.get("by_lambda", {}).get(level)
+    if not slot:
+        return None
+    cands = slot.get("candidates") or []
+    for cd in cands:
+        lq = cd.get("lambda_q")
+        if lq is not None:
+            try:
+                return float(lq)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _fidelity_weight(lambda_q: Optional[float], floor: Optional[float]) -> float:
+    """Truncation-linear fidelity confidence (model.md §3a, default off).
+
+    ``floor`` None (default) => w=1 (identiy — no behavior change). Otherwise
+    ``w = min(1, lambda_q/floor)``: lambda_q >= floor => fully credible (w=1);
+    lambda_q -> 0 => not credited (w->0). Missing ``lambda_q`` => w=1.
+    """
+    if floor is None or lambda_q is None or lambda_q < 0:
+        return 1.0
+    if lambda_q >= floor:
+        return 1.0
+    if floor <= 0:
+        return 1.0
+    return max(0.0, min(1.0, lambda_q / floor))
+
+
 def build_inner_at_level(
     blocks: dict,
     level: str,
     *,
     skip_worse_than_baseline: bool = True,
     qid_table: Optional[dict] = None,
+    fidelity_floor: Optional[float] = None,
+    out_weights: Optional[list] = None,
 ) -> tuple[list, list, list]:
     """Build (phys_stats, queries_options, qbase_per_query) for one sampling
     level ``level``.
@@ -71,6 +110,15 @@ def build_inner_at_level(
     candidate's table is taken from its owning query and physical stats are keyed
     by ``(table, cols, param)`` so a multi-table problem gets per-table stats (and
     per-table measured maintenance can be attached).
+
+    Fidelity soft-penalty (model.md §3a, default off): ``fidelity_floor`` = k
+    (None => off => no weights). When on, per kept query we compute its
+    (query, level) fidelity confidence ``w = min(1, lambda_q/k)`` from the
+    slot's ``lambda_q`` and, if ``out_weights`` is supplied, append ``w`` in
+    LOCK-STEP with ``queries_options`` so the caller can pass
+    ``query_weight`` to :func:`optimize.solve_ilp`. ``out_weights`` is a
+    side-channel to avoid changing this function's 3-tuple return contract for
+    existing callers.
     """
     stat_index: dict[str, int] = {}
     phys_stats: list[PhysicalStat] = []
@@ -89,6 +137,10 @@ def build_inner_at_level(
         if base != base:      # NaN baseline (e.g. est/0 when truth==0) -> skip
             continue
         qbase_list.append(base)
+        if out_weights is not None:
+            out_weights.append(
+                _fidelity_weight(_lambda_q_of_slot(block, level), fidelity_floor)
+            )
         qtable = (qid_table or {}).get(qid, "")
         opts: list[Option] = []
         for cd in slot.get("candidates", []):
@@ -117,6 +169,7 @@ def build_inner_at_level(
 
 def inner_optimal_at_level(blocks, level, budget_bytes, *,
                            maint_budget: Optional[float] = None,
+                           fidelity_floor: Optional[float] = None,
                            ) -> tuple[Optional[ILPResult], list, list]:
     """Solve the inner selection at one sampling level under a storage
     (``budget_bytes``) and, optionally, a maintenance budget (``maint_budget``)
@@ -129,25 +182,39 @@ def inner_optimal_at_level(blocks, level, budget_bytes, *,
     (counted in ``res.total_maint``). When set, ``sum_s maint_cost(s)*y_s <= M``
     is added (additive VAR model; the per-table FIXED component is handled
     separately at the outer / MaintProfile layer).
+
+    Fidelity soft-penalty (model.md §3a): ``fidelity_floor`` k None (default) =>
+    off (weights all 1, identical to before); a finite k turns on the
+    truncation-linear confidence weight ``w=min(1, lambda_q/k)`` per query and
+    passes ``query_weight`` to the solver (credits a query's benefit only by w;
+    reported q-error decode stays on true Deltas).
     """
-    phys, opts, qbases = build_inner_at_level(blocks, level)
+    w_accum: list[float] = []
+    phys, opts, qbases = build_inner_at_level(
+        blocks, level, fidelity_floor=fidelity_floor, out_weights=w_accum)
     if not opts:
         return None, phys, qbases
     res = solve_ilp(phys, opts, qbases, budget_bytes,
                     maint_budget=maint_budget,
                     optimizer_class=OptimizerClass.SPARSE_LINEAR,
-                    per_query_cap=1)
+                    per_query_cap=1,
+                    query_weight=w_accum if fidelity_floor is not None else None)
     return res, phys, qbases
 
 
 def search_sgrid(outdir: Path, workload: str, backend: str,
                   budget_bytes: int, *, maint_budget: Optional[float] = None,
                   fixed_per_table: Optional[dict] = None,
-                  rho: float = 0.0) -> dict:
+                  rho: float = 0.0,
+                  fidelity_floor: Optional[float] = None) -> dict:
     """Outer search over the S-grid of sampling levels: for each level ``L``
     solve the inner MILP under ``budget_bytes`` (storage) and (if given)
     ``maint_budget`` (maintenance hard cap), and additionally add
     ``Σ_t ρ·f_t(L)`` per-table fixed if rho/fixed given.
+
+    ``fidelity_floor`` (k, default None = off) enables the fidelity soft-penalty
+    (model.md §3a): a finite k threads per-query ``w=min(1,lambda_q/k)`` into
+    each level's inner solve.
 
     Returns per-level outcome rows: {level, mean_qerror(baseline), mean_qerror(deployed),
     n_selected, total_bytes, total_maint, selected_summary}.
@@ -157,7 +224,8 @@ def search_sgrid(outdir: Path, workload: str, backend: str,
     out: dict[str, dict] = {}
     for level in levels:
         res, phys, qbases = inner_optimal_at_level(
-            blocks, level, budget_bytes, maint_budget=maint_budget)
+            blocks, level, budget_bytes, maint_budget=maint_budget,
+            fidelity_floor=fidelity_floor)
         if res is None:
             out[level] = {"status": "no-candidates", "baseline_mean": float(np.mean(qbases)) if qbases else None}
             continue
